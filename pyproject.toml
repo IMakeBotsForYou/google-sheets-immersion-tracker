@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "immersion-tracker"
+version = "1.0.0"
+description = "Turn a WhatsApp group's daily language-immersion reports into a Google Sheet with progress charts."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+keywords = ["whatsapp", "google-sheets", "language-learning", "habit-tracker", "anki"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Education",
+]
+dependencies = [
+    "gspread>=6.0,<7",
+    "tzdata>=2023.3",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.scripts]
+immersion-tracker = "immersion_tracker.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["immersion_tracker*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

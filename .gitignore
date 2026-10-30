@@ -1,0 +1,37 @@
+# --- secrets & local configuration (never commit) ---------------------------
+.env
+.env.*
+!.env.example
+credentials/*
+!credentials/.gitkeep
+!credentials/*.example.json
+service_account*.json
+!service_account.example.json
+config.toml
+# WhatsApp names / phone numbers:
+people.json
+
+# --- chat exports (personal data) -------------------------------------------
+/data/
+/chat*.txt
+/_chat*.txt
+/WhatsApp*
+/*.zip
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- editors / OS -------------------------------------------------------------
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
