@@ -45,6 +45,14 @@ class ExtractReportTests(unittest.TestCase):
         self.assertIsNone(report.anki_cards)
         self.assertTrue(report.notes)
 
+    def test_free_text_after_the_report_does_not_stop_it_counting(self):
+        report, problem = extract("סיכום יום 9:\nקריאה 20 דקות\nשמיעה 20 דקות\nצפייה 5 דקות\nאנקי 40 קלפים\n\n"
+                                  "היום כנראה גם לא אספיק שעה אבל כן אשלים אנקי ואקרא כי זה כיף")
+        self.assertIsNone(problem)
+        self.assertEqual(report.day_number, 9)
+        self.assertEqual(report.minutes_by_activity, {"קריאה": 20, "שמיעה": 20, "צפייה": 5})
+        self.assertEqual((report.total_minutes, report.anki_cards, report.notes), (45, 40, []))
+
     def test_two_lines_without_header_is_flagged(self):
         report, problem = extract("צפייה 10\nקריאה 20")
         self.assertIsNone(report)

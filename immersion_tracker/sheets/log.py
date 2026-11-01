@@ -1,7 +1,10 @@
 """The log tab: one row per (day, student) with the activity breakdown.
 
-It is also the memory of the tool: every run merges its rows into what is already there, so history
+It is also the memory of the tool: every run adds its new rows to what is already there, so history
 survives even if a later chat export no longer contains the old messages.  The charts are built from it.
+
+Add-only, like the circles in the week tables: a (date, student) row that is already in the tab is never
+replaced - so a value corrected by hand stays corrected.  ``overwrite`` replaces rows with what the chat says.
 """
 from __future__ import annotations
 
@@ -54,8 +57,10 @@ def print_last_day_per_student(rows: list[list], columns: Sequence[str], header:
     print_table([header[0], header[1], header[2], f"{header[-1]} ({header[-2]})"], table)
 
 
-def write_log(spreadsheet, rows: list[list], title: str, columns: Sequence[str], header: Sequence[str]):
-    """Merge this run's rows into the log tab (same date+student = replaced) and rewrite it.
+def write_log(spreadsheet, rows: list[list], title: str, columns: Sequence[str], header: Sequence[str],
+              overwrite: bool = False):
+    """Add this run's rows to the log tab.  A row for a (date, student) that is already there is kept as it is,
+    unless `overwrite` (then it is replaced by the chat's version).
     Returns (log worksheet, all rows now in the log), or None if the tab was left alone."""
     import gspread
     header = list(header)
@@ -83,8 +88,15 @@ def write_log(spreadsheet, rows: list[list], title: str, columns: Sequence[str],
         if old_row[0]:
             rows_by_key[(old_row[0], old_row[2])] = (
                 [old_row[0], restore_number(old_row[1]), old_row[2]] + [restore_number(x) for x in old_row[3:]])
+    added = kept = differing = 0
     for new_row in rows:
-        rows_by_key[(new_row[0], new_row[2])] = new_row
+        key = (new_row[0], new_row[2])
+        if key not in rows_by_key or overwrite:
+            added += key not in rows_by_key
+            rows_by_key[key] = new_row
+        else:
+            kept += 1
+            differing += rows_by_key[key] != new_row        # the chat now says something else: we keep the sheet's
 
     column_order = {name: i for i, name in enumerate(columns)}
     all_rows = sorted(rows_by_key.values(), key=lambda r: (r[0], column_order.get(r[2], 99), r[2]))
@@ -93,5 +105,8 @@ def write_log(spreadsheet, rows: list[list], title: str, columns: Sequence[str],
         worksheet.resize(rows=len(all_rows) + 50)
     worksheet.clear()
     worksheet.update(values=[header] + all_rows, range_name="A1", value_input_option="RAW")
-    print("Log updated.")
+    print(f"Log updated: {added} new rows added, {kept} already there were left alone"
+          + (f" ({differing} differ from the chat - the sheet's values are kept; --overwrite to replace them)"
+             if differing else "")
+          + ("." if not overwrite else " (--overwrite: rows replaced by the chat's version)."))
     return worksheet, all_rows

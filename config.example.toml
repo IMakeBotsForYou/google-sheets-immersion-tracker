@@ -1,0 +1,123 @@
+# Immersion tracker - settings.
+#
+#   cp config.example.toml config.toml        (config.toml is git-ignored: it's yours)
+#
+# Everything here is optional - delete a line and the built-in default is used.
+# Secrets (spreadsheet id, Google key) do NOT belong in this file: they live in .env and credentials/.
+# The values below are the ones the project was built around; change them to fit your group.
+
+# ---------------------------------------------------------------------------
+[calendar]
+# Weekday of the FIRST ROW of every week table in the sheet.
+week_starts_on = "sunday"
+
+# Weekday Day #1 falls on. Day #1 is the cell of that weekday in the "week 1" table, Day #2 the next
+# cell, and so on into "week 2", "week 3"... (cells of week 1 before Day #1 are never written).
+day_1_weekday = "thursday"
+
+# Calendar date of Day #1. Leave it out and it is worked out from the chat
+# (printed on every run; pin it here, or with --day1, if the guess is wrong).
+day_1_date = 2026-10-22
+
+# Skip automatically until the FIRST ROW of this week table. Everything before it is left completely
+# untouched: no circles, no red crosses, nothing in the log. Day numbering is NOT shifted.
+# With Day 1 = Thu 22/10 and skip_until_week = 2, Day 1-3 are skipped and writing starts on
+# Day 4 = Sunday 25/10.   1 (or 0) = write everything.
+skip_until_week = 2
+
+# Manual alternative: leave exactly the first N days untouched (wins over skip_until_week).
+# skip_first_days = 3
+
+# The days are counted in this time zone ...
+timezone = "Asia/Jerusalem"
+
+# ... but the times in a WhatsApp export are in the time zone of the phone / PC that exported the chat.
+# Every message time is converted from chat_timezone to timezone (daylight saving included) before
+# the day_ends_at rule is applied. Leave it out if both are the same.
+chat_timezone = "Asia/Tokyo"
+
+# A day does not end at midnight: it runs until this time the next morning. Until then it can still be
+# reported and gets no red cross; from that moment an empty day turns red. The same rule decides which
+# day a report WITHOUT a day number belongs to. Can be overridden per run with --cutoff.
+day_ends_at = "05:00"
+
+# Messages sent BEFORE this moment (as shown in the chat export, i.e. in chat_timezone) are from the time
+# before everyone used the report format: they are not read at all. Leave it out to read every message.
+format_start = 2026-10-26T09:57:00
+
+# ---------------------------------------------------------------------------
+[reports]
+# "floor": 1h35 = 1 circle   "round": 1h35 = 2   "ceil" (any immersion > 0 always gives at least one)
+rounding = "floor"
+
+# Several reports for one day: keep the "last" one, "sum" them, or take the "max".
+multiple_reports = "last"
+
+# Optional extra line with a CARD COUNT (not minutes, not part of the total).
+anki_words = ["אנקי", "anki"]
+
+# Activity name (as shown in the log tab)  =  words that can start its line in a report.
+# A report is the sum of these activities, e.g.:
+#     סיכום יום 50
+#     צפייה 1 שעה ו-20 דקות
+#     קריאה 30
+#     שמיעה חצי שעה
+#     רילז 10 דקות
+#     אנקי 20 קלפים
+[reports.activities]
+"צפייה" = ["צפייה", "צפיה", "יוטיוב", "יוטוב"]     # "יוטיוב" lines count as צפייה (added up if both appear)
+"קריאה" = ["קריאה"]
+"שמיעה" = ["שמיעה", "שמיעה פסיבית", "הקשבה"]       # a "שמיעה פסיבית" line is added to שמיעה
+"רילז"  = ["רילז", "ריילז"]
+
+# ---------------------------------------------------------------------------
+[sheet]
+# The tab holding the week tables.
+worksheet = "חשיפה"
+
+# Per-day breakdown tab (also the tool's memory between runs, and the source of the charts).
+# Empty string = don't write it (and so no charts either).
+log_worksheet = "יומן חשיפה"
+
+# Week tables are found by their table NAME ("week 1", "week 2", ...). If the sheet has no named
+# tables, the tool scans for header_marker cells instead.
+week_table_name_regex = '^\s*week\s*(\d+)\s*$'
+header_marker = "曜日"                                   # header text of the weekday column
+weekday_labels = ["月", "火", "水", "木", "金", "土", "日"]   # row labels, MONDAY first
+
+# ---------------------------------------------------------------------------
+[appearance]
+circle = "◯"
+cross = "✖"
+green = "#34A853"
+red = "#EA4335"
+
+# false: a cell that already holds ◯ / ✖ (any amount) is never overwritten, only empty cells get written.
+# true (or --overwrite): always write; this also replaces log rows and chart data with the chat's version.
+# To refresh one cell, clear it in the sheet first (the log and chart data tabs work the same way).
+overwrite_filled_cells = false
+filled_cell_marks = "◯○⭕●⚪✖✗✘✕×❌xX"      # a cell containing any of these counts as "filled in"
+
+# ---------------------------------------------------------------------------
+[charts]
+# Two line charts on the log tab, one line per student: hours of immersion (top) and new Anki cards
+# (bottom), X = days since the start. The numbers come from a helper tab the tool rewrites every run.
+enabled = true
+data_worksheet = "נתוני גרפים"
+hours_cumulative = true       # true = running total of hours;     false = hours on each day
+cards_cumulative = true       # true = running total of new cards; false = cards on each day
+width_px = 780                # both charts share this width and the same left edge
+height_px = 340
+gap_px = 20                   # space between the two charts
+line_width = 3
+# column = 10                 # first column (0 = A); leave out = right after the log table
+
+# ---------------------------------------------------------------------------
+[console]
+# Most Windows consoles don't support right-to-left text, so Hebrew shows up reversed. With this on,
+# Hebrew is re-ordered for display when printing to a terminal (nothing written to the sheet or to a
+# redirected file is touched). Turn it off (or use --raw-hebrew) if your terminal already shows Hebrew right.
+bidi_fix = true
+
+# "Done. Press Enter to exit." when run interactively (keeps a double-clicked window open).
+pause_on_exit = true

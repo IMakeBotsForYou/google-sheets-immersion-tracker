@@ -1,0 +1,9 @@
+{
+  "students": {
+    "Alice Cohen": "Alice",
+    "Ben Levi": "Ben",
+    "Chloe Mizrahi": "Chloe",
+    "Dan Peretz": "Dan"
+  },
+  "ignore": ["Teacher Rivka"]
+}

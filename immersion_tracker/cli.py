@@ -22,7 +22,7 @@ from .setup_wizard import read_sheet_headers, setup_people
 from .sheets.charts import print_chart_colors, write_charts
 from .sheets.client import make_sheet_opener
 from .sheets.log import build_log_rows, log_columns, print_last_day_per_student, print_log, write_log
-from .sheets.week_tables import read_snapshot, sheet_order, write_week_tables
+from .sheets.week_tables import late_report_cells, print_late_reports, read_snapshot, sheet_order, write_week_tables
 from .textutil import normalize_name
 from .timeline import WEEKDAY_SHORT, Calendar
 from .whatsapp import parse_chat
@@ -75,7 +75,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     output = parser.add_argument_group("output")
     output.add_argument("--overwrite", action="store_true",
-                        help="also overwrite sheet cells that already hold ◯ / ✖ (default: leave them alone)")
+                        help="replace what is already in the sheet with the chat's version: cells holding ◯ / ✖, log rows, "
+                             "and the chart data (default: anything already there is left alone)")
+    output.add_argument("--rebuild-charts", action="store_true",
+                        help="rebuild only the chart data tab from the log (the log itself is left as it is)")
     output.add_argument("--raw-hebrew", action="store_true",
                         help="print Hebrew in plain logical order (for terminals that handle Hebrew themselves)")
     output.add_argument("--no-pause", action="store_true", help="don't wait for Enter at the end")
@@ -182,6 +185,9 @@ def run(args: argparse.Namespace) -> Settings:
 
     overwrite = args.overwrite or settings.appearance.overwrite_filled_cells
     if dry_run:
+        if snapshot and snapshot.blocks:        # a late report would replace a ✖ that is already in the sheet
+            print_late_reports(late_report_cells(plan, calendar.week1_first_row_date(day1), snapshot,
+                                                 settings.appearance), would=True)
         if not overwrite:
             print("\n(when writing, cells that already hold ◯ / ✖ in the sheet are left untouched)")
         if log_rows:
@@ -191,13 +197,13 @@ def run(args: argparse.Namespace) -> Settings:
         return settings
 
     spreadsheet = write_week_tables(plan, day1, overwrite, snapshot, settings.sheet, settings.appearance, calendar)
-    logged = write_log(spreadsheet, log_rows, log_title, columns, log_header) if log_rows else None
+    logged = write_log(spreadsheet, log_rows, log_title, columns, log_header, overwrite=overwrite) if log_rows else None
     if logged:
         log_worksheet, all_log_rows = logged
         print_last_day_per_student(log_rows, columns, log_header)
         if settings.charts.enabled:
             write_charts(spreadsheet, log_worksheet, all_log_rows, (today - day1).days + 1, columns,
-                         settings.charts, len(log_header))
+                         settings.charts, len(log_header), overwrite=overwrite or args.rebuild_charts)
     return settings
 
 

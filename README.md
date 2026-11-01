@@ -16,7 +16,7 @@ reports (even *"שעה וחצי"* and *"1 שעה ו-20 דקות"*), and keeps a 
 - ◯ **circles** for every day someone put in the time, a red ✖ once a day is over with nothing reported
 - 📒 a **log tab** with the full breakdown per student and day: watching, reading, listening, reels, Anki cards
 - 📈 **two live charts**: hours of immersion and new Anki cards, one line per student
-- 🧠 it **follows your sheet**: students are listed in the order of your sheet's columns, and it never overwrites cells that are already filled in
+- 🧠 it **follows your sheet**: students are listed in the order of your sheet's columns, and it never overwrites what is already in the sheet (the week-table cells, the log rows, the chart data), so your manual corrections stay
 
 <p align="center">
   <img src="docs/charts-preview.png" alt="Preview of the two charts" width="640"><br>
@@ -42,7 +42,7 @@ Leaving Day 1-3 untouched - writing from Day 4 (2026-10-25)
 Now: 2026-11-01 12:00 (Asia/Jerusalem) -> current day is 2026-11-01; days end at 05:00, so ✖ is given to days before 2026-11-01
 
 --- 1 warning(s) ---
- * 2026-10-28 22:05 (Israel 10-28 22:05) Dan Peretz: couldn't read the צפייה duration 'כמה שיכולתי'  [סיכום יום 7]
+ * 2026-10-28 22:05 (Israel 10-28 22:05) Dan: couldn't read the צפייה duration 'כמה שיכולתי'  [סיכום יום 7]
 
 === week 2 ===
 תלמיד | Sun 25/10 | Mon 26/10 | Tue 27/10 | Wed 28/10 | Thu 29/10 | Fri 30/10 | Sat 31/10
@@ -53,7 +53,7 @@ Chloe | ◯◯        | ◯◯◯◯      | ✖         | ◯◯◯◯      | �
 Dan   | ◯         | ◯         | ◯         | ✖         | ✖         | ◯         | ◯
 ```
 
-`--offline` never contacts Google. The sample chat is fictional. Note how Dan's unreadable line
+`--offline` never contacts Google. The sample chat is fictional. Warnings name the student (the name from your sheet), never a phone number. Note how Dan's unreadable line
 (`צפייה כמה שיכולתי`, "as much as I could") is reported as a warning instead of being silently guessed, and
 earns a ✖ for that day.
 
@@ -135,7 +135,8 @@ python main.py <chat export> [options]
 | `--today WHEN` | pretend it is now: `2026-10-30` (noon) or `"2026-10-30 04:30"` |
 | `--cutoff HOUR` | hour the day ends, e.g. `5` or `04:30`, overrides `day_ends_at` |
 | `--date-order {auto,DMY,MDY,YMD}` | how dates in the export are written (default: guess) |
-| `--overwrite` | also overwrite cells that already hold ◯ / ✖ |
+| `--overwrite` | replace what is already in the sheet with the chat's version: ◯ / ✖ cells, log rows and chart data |
+| `--rebuild-charts` | rebuild only the chart data tab from the log, leaving the log (and your corrections in it) as it is |
 | `--raw-hebrew` | plain logical-order Hebrew (for terminals that already handle it) |
 | `--no-pause` | don't wait for Enter at the end |
 | `--config FILE` / `--people FILE` | use other settings / people files than `config.toml` / `people.json` |
@@ -186,8 +187,14 @@ Every key is optional; unknown keys are rejected so a typo can't silently do not
   so it never changes between runs, and no two students share one (12 colours, all clearly distinct).
 - Both charts are anchored in the same column with the same width, stacked one above the other, right next
   to the log table. They are replaced on every run.
-- They read from a helper tab the tool rewrites on every run (a Sheets chart can't pivot the long log
-  format by itself).
+- They read from a helper tab (a Sheets chart can't pivot the long log format by itself). That tab is
+  **add-only**, like the circles: a filled cell is never replaced, only empty cells are filled (new days, new
+  students). Days and students already in it stay even if they leave the log or `people.json`.
+- Running totals **continue from what the tab holds**: if you correct a student's total by hand, the next
+  days build on your corrected number instead of jumping back to the log's own total.
+- To refresh one cell, clear it. To rebuild the whole tab from the log, run with `--rebuild-charts`.
+  Switching `hours_cumulative` / `cards_cumulative` rebuilds just that block, so running totals and per-day
+  values are never mixed.
 
 </details>
 
@@ -231,6 +238,32 @@ python -m unittest discover -s tests -v       # or:  pytest
 
 The tests need no Google account and no secrets: an in-memory stand-in for `gspread`
 ([`tests/fake_gspread.py`](tests/fake_gspread.py)) lets the end-to-end tests run the real command line.
+
+## Where is my data stored?
+
+Nothing is kept in a local database: **the Google Sheet is the memory.** The tool reads the chat export, adds
+what is new, and leaves the rest alone.
+
+| Where | What | Fixing a mistake |
+|---|---|---|
+| Sheet, week tab | the ◯ / ✖ cells | edit the cell (it is never overwritten) |
+| Sheet, **log tab** | one row per student and day: the source of truth for the charts | edit the row (it is never overwritten) |
+| Sheet, chart data tab | the numbers behind the two charts | edit or clear a cell; `--rebuild-charts` rebuilds the tab from the log |
+| `people.json` (project folder) | who is who: WhatsApp name -> sheet column | `--setup`, or edit the file |
+| `.env`, `config.toml`, `credentials/` | secrets and settings | edit the files |
+| your chat export | wherever you saved it; read on every run, never copied | - |
+
+**Correcting a wrong report** (say someone typed 400 Anki cards instead of 40): fix that row in the log tab
+(or the cell in the week table). It stays fixed on every later run, even though the chat still says 400. Then
+run with `--rebuild-charts` so the charts pick the corrected log up. Use `--overwrite` only when you want the
+sheet reset to what the chat says. Use *Version history* in Google Sheets if you want to go back in time.
+
+**Late reports.** The tool marks a finished day without a report with ✖ (and 0 in the chart data). If the report
+arrives *after* that - say a student posts Friday's summary on Saturday evening - the next run counts it anyway:
+the ✖ becomes ◯, the chart data for that day is filled in (later running totals are raised by the same amount),
+and the run prints a warning, e.g. `Chloe Fri 30/10: ✖ -> ◯◯◯◯◯` and `Chloe day 9: +335 min, +34 Anki cards`.
+A dry run shows the same warning as "would be counted". Only a ✖ (or a day the chart data holds as 0 while the log
+has a report for it) is replaced - a ◯ cell, a log row or a chart number you corrected by hand stays as it is.
 
 ## Security and privacy
 

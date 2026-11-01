@@ -3,15 +3,24 @@
 The numbers live in a small helper tab that is rewritten on every run (a Sheets chart can't pivot the long
 log format by itself); the charts are replaced on every run too, so they always match the log.
 Both charts get the same anchor column, offset and width, so they line up one above the other.
+
+The helper tab is add-only, like the circles in the week tables: a cell that already holds a number is
+never replaced, only empty cells are filled (new days, new students).  ``overwrite`` rebuilds it from the log.
+One exception - late reports: a day that the tab holds as "nothing" (0 hours / 0 new cards) while the log has a
+report for it was written before the report arrived.  Such a cell is filled in, and the running totals after it
+are raised by the same amount.  (A number someone typed by hand is never mistaken for this: it isn't "nothing".)
 """
 from __future__ import annotations
 
 import math
+import re
+from dataclasses import dataclass, field
 from itertools import accumulate
 from typing import Sequence
 
 from ..console import print_table
 from ..settings import ChartSettings
+from ..textutil import normalize_name
 from .colors import hex_to_rgb
 from .palette import student_colors
 
@@ -78,13 +87,200 @@ def build_chart_tables(log_rows: list[list], columns: Sequence[str], today_numbe
     return (days, finish(minutes, settings.hours_cumulative, 60), finish(cards, settings.cards_cumulative, 1))
 
 
-def chart_grid(days: list[int], columns: Sequence[str], hours: dict, cards: dict) -> list[list]:
-    """The helper tab: hours block, one empty column, cards block - both with the day number in front."""
+def chart_grid(days: list[int], columns: Sequence[str], hours: dict, cards: dict, marker: str = "") -> list[list]:
+    """The helper tab: hours block, a separator column, cards block - both with the day number in front.
+    A None value is left blank.  The separator's header holds `marker` (see mode_marker)."""
     columns = list(columns)
-    header = [DAY_HEADER] + columns + [""] + [DAY_HEADER] + columns
-    body = [[day] + [hours[column][i] for column in columns] + [""] + [day] + [cards[column][i] for column in columns]
+    blank = lambda value: "" if value is None else value
+    header = [DAY_HEADER] + columns + [marker] + [DAY_HEADER] + columns
+    body = [[day] + [blank(hours[column][i]) for column in columns] + [""]
+            + [day] + [blank(cards[column][i]) for column in columns]
             for i, day in enumerate(days)]
     return [header] + body
+
+
+# ----------------------------------------------------------------------------
+# Add-only merging with what is already in the helper tab
+# ----------------------------------------------------------------------------
+_MODE_RE = re.compile(r"hours=(\S+)\s+cards=(\S+)")
+
+
+def _mode_word(cumulative: bool) -> str:
+    return "cumulative" if cumulative else "per-day"
+
+
+def mode_marker(settings: ChartSettings) -> str:
+    """Written in the separator column's header, so a later run can tell if running totals were switched on/off
+    (old numbers of the other kind must not be mixed with new ones)."""
+    return f"hours={_mode_word(settings.hours_cumulative)} cards={_mode_word(settings.cards_cumulative)}"
+
+
+def _parse_number(text: str):
+    """Cell text -> int / float (the sheet may show a decimal comma).  Anything else is kept as text."""
+    text = text.strip()
+    if re.fullmatch(r"-?\d+", text):
+        return int(text)
+    if re.fullmatch(r"-?\d+\.\d+", text):
+        return float(text)
+    if re.fullmatch(r"-?\d+,\d{1,2}", text):              # decimal comma: 2,08
+        return float(text.replace(",", "."))
+    if re.fullmatch(r"-?\d{1,3}(?:,\d{3})+", text):       # thousands separator: 1,234
+        return int(text.replace(",", ""))
+    return text
+
+
+def _agrees(kept_value, from_log) -> bool:
+    """Is a number already in the tab the one the log gives (up to the 2-decimal rounding)?"""
+    return from_log is not None and abs(kept_value - from_log) <= 0.011
+
+
+@dataclass
+class StoredChartData:
+    """What the helper tab already holds."""
+    students: list[str]                 # headers as written (hours block first, then any only in the cards block)
+    hours: dict[tuple[int, str], object]    # (day, normalised student) -> value, filled cells only
+    cards: dict[tuple[int, str], object]
+    hours_mode: str | None              # None = tab written before the marker existed
+    cards_mode: str | None
+
+
+def read_stored_data(grid: list[list[str]]) -> StoredChartData | None:
+    """Parse the helper tab as written by chart_grid.  None if it is empty or not laid out like ours."""
+    if not grid or not grid[0] or grid[0][0].strip() != DAY_HEADER:
+        return None
+    header = [cell.strip() for cell in grid[0]]
+    try:
+        second = header.index(DAY_HEADER, 1)            # where the cards block starts
+    except ValueError:
+        return None
+    first_students = header[1:second - 1]               # header[second - 1] is the separator
+    second_students = [name for name in header[second + 1:] if name]
+    marker = _MODE_RE.fullmatch(header[second - 1]) if second >= 1 else None
+
+    def read_block(day_column: int, students: list[str], first_column: int) -> dict:
+        values = {}
+        for row in grid[1:]:
+            day_text = row[day_column].strip() if day_column < len(row) else ""
+            if not day_text.isdigit():
+                continue
+            for offset, name in enumerate(students):
+                column = first_column + offset
+                text = row[column].strip() if column < len(row) else ""
+                if text != "":
+                    values[(int(day_text), normalize_name(name))] = _parse_number(text)
+        return values
+
+    known = {normalize_name(name) for name in first_students}
+    return StoredChartData(
+        students=first_students + [name for name in second_students if normalize_name(name) not in known],
+        hours=read_block(0, first_students, 1),
+        cards=read_block(second, second_students, second + 1),
+        hours_mode=marker.group(1) if marker else None,
+        cards_mode=marker.group(2) if marker else None)
+
+
+@dataclass
+class MergedChartData:
+    days: list[int]
+    columns: list[str]
+    hours: dict[str, list]              # student -> one value per day (None = blank)
+    cards: dict[str, list]
+    kept: int                           # cells that were already filled and were left alone
+    added: int                          # cells filled in now
+    notes: list[str]
+    late: dict[tuple[str, int], dict[str, float]] = field(default_factory=dict)
+    # ^ late reports counted: (student, day) -> {"hours": hours added, "cards": cards added}
+
+
+def merge_chart_data(days: list[int], hours: dict, cards: dict, columns: Sequence[str],
+                     stored: StoredChartData | None, settings: ChartSettings, overwrite: bool) -> MergedChartData:
+    """Computed numbers + what the tab already holds.  A filled cell is never replaced (unless `overwrite`);
+    days and students already in the tab stay even if they are no longer in the log / the people file."""
+    columns = list(columns)
+    notes: list[str] = []
+    hours_keep: dict = {}
+    cards_keep: dict = {}
+    extra: list[str] = []
+    if stored and overwrite:
+        notes.append("rebuilt from the log (--overwrite)")
+    elif stored:
+        wanted = {"hours": _mode_word(settings.hours_cumulative), "cards": _mode_word(settings.cards_cumulative)}
+        for name, keep, found in (("hours", stored.hours, stored.hours_mode), ("cards", stored.cards, stored.cards_mode)):
+            if found in (None, wanted[name]):       # None: an older tab without the marker - assume it matches
+                (hours_keep if name == "hours" else cards_keep).update(keep)
+            else:
+                notes.append(f"{name} are now {wanted[name]} (the tab had {found}): that block was rebuilt from the log")
+        current = {normalize_name(column) for column in columns}
+        extra = [name for name in stored.students if normalize_name(name) not in current]
+
+    all_columns = columns + extra
+    all_days = sorted(set(days) | {day for day, _ in list(hours_keep) + list(cards_keep)})
+    position = {day: i for i, day in enumerate(days)}
+
+    late: dict[tuple[str, int], dict[str, float]] = {}
+
+    def build(kind: str, computed: dict, keep: dict, cumulative: bool):
+        merged, kept, added = {}, 0, 0
+        for column in all_columns:
+            key, values = normalize_name(column), []
+            previous = None                 # the last number in this column (kept or new)
+            previous_from_log = None        # what the log itself says for the previous day
+            shift = 0.0                     # running totals: what late reports added to the days after them
+            for day in all_days:
+                from_log = computed[column][position[day]] if column in computed and day in position else None
+                # what the log says happened on this day itself
+                amount = None if from_log is None else from_log - (previous_from_log or 0) if cumulative else from_log
+                if (day, key) in keep:
+                    value = keep[(day, key)]
+                    kept += 1
+                    if isinstance(value, (int, float)):
+                        if cumulative and shift:
+                            value = round(value + shift, 2)
+                        held = value - (previous or 0) if cumulative else value     # what the tab holds for this day
+                        if amount is not None and amount > 0.011 and abs(held) <= 0.011:
+                            # The tab says "nothing" for a day the log has a report for: it was written before the
+                            # report arrived.  Count it, and raise the running totals after it by the same amount.
+                            counted = round((previous or 0) + amount, 2) if cumulative else amount
+                            shift += counted - value if cumulative else 0
+                            value = counted
+                            late.setdefault((column, day), {})[kind] = amount
+                            kept -= 1
+                            added += 1
+                elif from_log is None:
+                    value = None
+                else:
+                    value = from_log
+                    if cumulative and isinstance(previous, (int, float)) and not _agrees(previous, previous_from_log):
+                        # The numbers before this day were changed by hand (or came from an older log), so a running
+                        # total taken from the log would jump.  Continue from what the tab holds instead.
+                        value = round(previous + from_log - (previous_from_log or 0), 2)
+                    added += 1
+                values.append(value)
+                if isinstance(value, (int, float)):
+                    previous = value
+                previous_from_log = from_log
+            merged[column] = values
+        return merged, kept, added
+
+    merged_hours, kept_hours, added_hours = build("hours", hours, hours_keep, settings.hours_cumulative)
+    merged_cards, kept_cards, added_cards = build("cards", cards, cards_keep, settings.cards_cumulative)
+    return MergedChartData(all_days, all_columns, merged_hours, merged_cards,
+                           kept_hours + kept_cards, added_hours + added_cards, notes, late)
+
+
+def print_late_reports(late: dict[tuple[str, int], dict[str, float]]) -> None:
+    """Warn about the late reports merge_chart_data counted."""
+    if not late:
+        return
+    print(f"\nWARNING: {len(late)} late report(s) counted in the chart data - "
+          f"it still held nothing for a day the log has a report for:")
+    for (column, day), amounts in sorted(late.items(), key=lambda item: (item[0][1], item[0][0])):
+        parts = []
+        if "hours" in amounts:
+            parts.append(f"+{round(amounts['hours'] * 60)} min")
+        if "cards" in amounts:
+            parts.append(f"+{round(amounts['cards'])} Anki cards")
+        print(f"  * {column} day {day}: {', '.join(parts)}")
 
 
 def line_chart_request(*, title: str, y_title: str, data_sheet_id: int, first_col: int, row_count: int,
@@ -123,15 +319,15 @@ def line_chart_request(*, title: str, y_title: str, data_sheet_id: int, first_co
 
 
 def write_charts(spreadsheet, log_worksheet, log_rows: list[list], today_number: int, columns: Sequence[str],
-                 settings: ChartSettings, log_column_count: int) -> None:
-    """Rewrite the helper data tab and (re)draw the two charts on the log tab."""
+                 settings: ChartSettings, log_column_count: int, overwrite: bool = False) -> None:
+    """Add to the helper data tab (filled cells are kept) and (re)draw the two charts on the log tab."""
     import gspread
     columns = list(columns)
     tables = build_chart_tables(log_rows, columns, today_number, settings)
     if tables is None:
         print("No logged days yet - no charts drawn.")
         return
-    days, hours, cards = tables
+    computed_days, computed_hours, computed_cards = tables
 
     # --- helper tab with the numbers
     try:
@@ -145,12 +341,18 @@ def write_charts(spreadsheet, log_worksheet, log_rows: list[list], today_number:
         print(f"WARNING: tab '{settings.data_worksheet}' exists but doesn't look like this script's chart data "
               f"- charts not drawn. Rename/delete it or change data_worksheet in [charts] of config.toml.")
         return
-    grid = chart_grid(days, columns, hours, cards)
+    merged = merge_chart_data(computed_days, computed_hours, computed_cards, columns,
+                              read_stored_data(existing), settings, overwrite)
+    days, columns = merged.days, merged.columns         # the tab may hold days / students the log no longer has
+    grid = chart_grid(days, columns, merged.hours, merged.cards, mode_marker(settings))
     width = len(grid[0])
     if data_sheet.row_count < len(grid) + 20 or data_sheet.col_count < width:
         data_sheet.resize(rows=max(data_sheet.row_count, len(grid) + 20), cols=max(data_sheet.col_count, width))
     data_sheet.clear()
     data_sheet.update(values=grid, range_name="A1", value_input_option="RAW")
+    print(f"Chart data: kept {merged.kept} filled cells, added {merged.added} new ones"
+          + "".join(f"\n  ({note})" for note in merged.notes))
+    print_late_reports(merged.late)
 
     # --- make sure the log tab has room (an anchor cell outside the grid is refused)
     anchor_column = chart_column(settings, log_column_count)

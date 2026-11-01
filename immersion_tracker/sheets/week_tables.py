@@ -10,7 +10,7 @@ from ..errors import TrackerError
 from ..planning import SheetCell
 from ..settings import AppearanceSettings, SheetSettings
 from ..textutil import normalize_name
-from ..timeline import Calendar
+from ..timeline import WEEKDAY_SHORT, Calendar
 from .client import OpenSheet
 from .colors import hex_to_rgb
 
@@ -155,6 +155,40 @@ def is_filled(text: str, marks: str) -> bool:
     return any(char in marks for char in text)
 
 
+def _current_text(values: list[list[str]], row: int, col: int) -> str:
+    return values[row][col] if row < len(values) and col < len(values[row]) else ""
+
+
+def late_report_cells(plan: dict[tuple[str, date], SheetCell], week1_start: date, snapshot: SheetSnapshot,
+                      appearance: AppearanceSettings) -> dict[tuple[str, date], tuple[str, str]]:
+    """Late reports: cells where the sheet shows a ✖ (nothing reported) although the chat now has a report
+    for that day.  A ✖ is only the tool's own "no report yet" mark, so these are replaced even though filled
+    cells are normally left alone.  -> {(student, day): (text in the sheet, text from the chat)}."""
+    late: dict[tuple[str, date], tuple[str, str]] = {}
+    for (column_name, day), cell in plan.items():
+        if not cell.green:
+            continue
+        week_index, row_in_week = divmod((day - week1_start).days, 7)
+        block = snapshot.blocks.get(week_index + 1)
+        col = block.column_by_student.get(normalize_name(column_name)) if block else None
+        if col is None:
+            continue
+        current = _current_text(snapshot.values, block.header_row + 1 + row_in_week, col)
+        if appearance.cross in current and appearance.circle not in current:
+            late[(column_name, day)] = (current.strip(), cell.text)
+    return late
+
+
+def print_late_reports(late: dict[tuple[str, date], tuple[str, str]], would: bool = False) -> None:
+    """The warning for late_report_cells.  `would`: a dry run, nothing has been written."""
+    if not late:
+        return
+    print(f"\nWARNING: {len(late)} late report(s) {'would be ' if would else ''}counted - "
+          f"the sheet already had ✖ for the day:")
+    for (student, day), (old, new) in sorted(late.items(), key=lambda item: (item[0][1], item[0][0])):
+        print(f"  * {student} {WEEKDAY_SHORT[day.weekday()]} {day:%d/%m}: {old} -> {new}")
+
+
 def write_week_tables(plan: dict[tuple[str, date], SheetCell], day1: date, overwrite: bool, snapshot: SheetSnapshot,
                       sheet: SheetSettings, appearance: AppearanceSettings, calendar: Calendar):
     """Write the plan into the week tables.  Returns the spreadsheet."""
@@ -168,6 +202,7 @@ def write_week_tables(plan: dict[tuple[str, date], SheetCell], day1: date, overw
     print(f"Found {len(blocks)} week tables (week {min(blocks)} - week {max(blocks)})")
 
     week1_start = calendar.week1_first_row_date(day1)
+    late = late_report_cells(plan, week1_start, snapshot, appearance)
     requests = []
     skipped_filled = 0
     missing_weeks: set[int] = set()
@@ -183,8 +218,8 @@ def write_week_tables(plan: dict[tuple[str, date], SheetCell], day1: date, overw
             missing_columns.add(column_name)
             continue
         sheet_row = block.header_row + 1 + row_in_week
-        current = values[sheet_row][col] if sheet_row < len(values) and col < len(values[sheet_row]) else ""
-        if not overwrite and is_filled(current, appearance.filled_cell_marks):
+        current = _current_text(values, sheet_row, col)
+        if not overwrite and is_filled(current, appearance.filled_cell_marks) and (column_name, day) not in late:
             skipped_filled += 1
             continue
         requests.append(cell_update_request(worksheet.id, sheet_row, col, cell, appearance))
@@ -194,6 +229,7 @@ def write_week_tables(plan: dict[tuple[str, date], SheetCell], day1: date, overw
     print(f"Updated {len(requests)} cells.")
     if skipped_filled:
         print(f"Left {skipped_filled} cells alone that already had ◯ / ✖ in them (--overwrite to replace them).")
+    print_late_reports(late)
     if missing_weeks:
         print(f"WARNING: no table named 'week N' for N in {sorted(missing_weeks)} - those days were not written.")
     if missing_columns:

@@ -56,15 +56,16 @@ def gather_reports(messages: list[Message], people: People, parser: ReportParser
             unknown_senders[message.sender] += 1
             continue
 
+        student = column_by_sender[sender_key]      # the student's name as in the sheet - not the phone number
         report, problem = parser.extract(message)
         if problem:
             first_line = message.text.strip().splitlines()[0][:60] if message.text.strip() else ""
-            warn(f"{message_stamp(message)} {message.sender}: {problem}  [{first_line}]",
+            warn(f"{message_stamp(message)} {student}: {problem}  [{first_line}]",
                  calendar.immersion_day(message.sent_at))
         if report:
             for note in report.notes:
-                warn(f"{message_stamp(message)} {message.sender}: {note}", calendar.immersion_day(message.sent_at))
-            found.append(FoundReport(column_by_sender[sender_key], message, report))
+                warn(f"{message_stamp(message)} {student}: {note}", calendar.immersion_day(message.sent_at))
+            found.append(FoundReport(student, message, report))
 
     for name, count in unknown_senders.most_common():
         warn(f"sender not classified: {name!r} ({count} messages) - run with --setup", None)
@@ -97,7 +98,7 @@ def collect_day_totals(found: list[FoundReport], day1: date, first_day_to_write:
     reports_by_cell: dict[tuple[str, date], list[Report]] = defaultdict(list)
     for item in found:
         message, report = item.message, item.report
-        who = f"{message_stamp(message)} {message.sender}"
+        who = f"{message_stamp(message)} {item.sheet_column}"
         sent_day = calendar.immersion_day(message.sent_at)      # a message before day_ends_at still belongs to the previous day
 
         if report.day_number is not None:

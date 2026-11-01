@@ -5,7 +5,8 @@ import unittest
 
 from immersion_tracker.settings import ChartSettings
 from immersion_tracker.sheets.charts import (all_possible_chart_titles, build_chart_tables, chart_column, chart_grid,
-                                             chart_titles, line_chart_request)
+                                             chart_titles, line_chart_request, merge_chart_data, mode_marker,
+                                             read_stored_data)
 from immersion_tracker.sheets.palette import PALETTE, student_colors
 
 NAMES = ["Alice", "Ben", "Chloe", "Dan", "Eve", "Frank", "Grace", "Heidi", "Ivan", "Judy"]
@@ -106,6 +107,181 @@ class ChartRequestTests(unittest.TestCase):
         self.assertIn(chart_titles(ChartSettings(hours_cumulative=False))["hours"], all_possible_chart_titles())
         self.assertEqual(chart_column(ChartSettings(), 9), 10)
         self.assertEqual(chart_column(ChartSettings(column=3), 9), 3)
+
+
+
+def as_sheet_text(grid):
+    """What get_all_values() gives back: everything as text, trailing blanks trimmed."""
+    return [[str(cell) for cell in row] for row in grid]
+
+
+class AddOnlyMergeTests(unittest.TestCase):
+    """The helper tab behaves like the circles: filled cells are kept, only empty ones are filled."""
+    ROWS = [log_row(4, "A", 60, 10), log_row(5, "A", 120, 20), log_row(6, "A", 60, 5)]
+
+    def computed(self, today, columns=("A",), settings=None):
+        return build_chart_tables(self.ROWS, list(columns), today, settings or ChartSettings())
+
+    def stored_after_first_run(self, today=5, columns=("A",)):
+        settings = ChartSettings()
+        days, hours, cards = self.computed(today, columns)
+        merged = merge_chart_data(days, hours, cards, list(columns), None, settings, overwrite=False)
+        grid = chart_grid(merged.days, merged.columns, merged.hours, merged.cards, mode_marker(settings))
+        return read_stored_data(as_sheet_text(grid))
+
+    def test_round_trip_through_the_sheet(self):
+        stored = self.stored_after_first_run()
+        self.assertEqual(stored.students, ["A"])
+        self.assertEqual(stored.hours, {(4, "a"): 1, (5, "a"): 3})
+        self.assertEqual(stored.cards, {(4, "a"): 10, (5, "a"): 30})
+        self.assertEqual((stored.hours_mode, stored.cards_mode), ("cumulative", "cumulative"))
+
+    def test_a_filled_cell_is_never_replaced_and_new_days_are_added(self):
+        stored = self.stored_after_first_run(today=5)
+        stored.hours[(5, "a")] = 99                                  # somebody corrected / typed a value
+        days, hours, cards = self.computed(today=7)
+        merged = merge_chart_data(days, hours, cards, ["A"], stored, ChartSettings(), overwrite=False)
+        self.assertEqual(merged.days, [4, 5, 6])                     # day 6 is new
+        self.assertEqual(merged.hours["A"], [1, 99, 100.0])          # 99 survived; day 6 continues from it (+1 h that day)
+        self.assertEqual((merged.kept, merged.added), (4, 2))
+
+    def test_overwrite_rebuilds_from_the_log(self):
+        stored = self.stored_after_first_run(today=5)
+        stored.hours[(5, "a")] = 99
+        days, hours, cards = self.computed(today=7)
+        merged = merge_chart_data(days, hours, cards, ["A"], stored, ChartSettings(), overwrite=True)
+        self.assertEqual(merged.hours["A"], [1, 3, 4.0])
+        self.assertEqual(merged.kept, 0)
+
+    def test_a_new_student_is_added_and_old_values_stay(self):
+        stored = self.stored_after_first_run(today=5)
+        rows = self.ROWS + [log_row(4, "B", 30, 7)]
+        days, hours, cards = build_chart_tables(rows, ["A", "B"], 5, ChartSettings())
+        merged = merge_chart_data(days, hours, cards, ["B", "A"], stored, ChartSettings(), overwrite=False)
+        self.assertEqual(merged.columns, ["B", "A"])                 # the sheet's order decides the layout
+        self.assertEqual(merged.hours["A"], [1, 3])
+        self.assertEqual(merged.hours["B"], [0.5, 0.5])
+
+    def test_a_student_who_left_keeps_their_data(self):
+        stored = self.stored_after_first_run(today=5, columns=("A",))
+        days, hours, cards = build_chart_tables([log_row(4, "B", 30, 7)], ["B"], 5, ChartSettings())
+        merged = merge_chart_data(days, hours, cards, ["B"], stored, ChartSettings(), overwrite=False)
+        self.assertEqual(merged.columns, ["B", "A"])
+        self.assertEqual(merged.hours["A"], [1, 3])
+
+    def test_switching_running_totals_rebuilds_only_that_block(self):
+        stored = self.stored_after_first_run(today=5)
+        stored.cards[(5, "a")] = 777                                 # a marker of "kept"
+        per_day = ChartSettings(hours_cumulative=False)              # cards stay cumulative
+        days, hours, cards = self.computed(today=6, settings=per_day)
+        merged = merge_chart_data(days, hours, cards, ["A"], stored, per_day, overwrite=False)
+        self.assertEqual(merged.hours["A"], [1.0, 2.0, 1.0])         # recomputed per day, not the old running totals
+        self.assertEqual(merged.cards["A"], [10, 777, 782])         # untouched block keeps 777 and continues from it (+5)
+        self.assertTrue(any("hours are now per-day" in note for note in merged.notes))
+
+    def test_new_days_continue_from_hand_corrected_totals(self):
+        """A student logged 400 instead of 40 cards for five days; the totals in the tab were fixed by hand."""
+        wrong = [log_row(day, "M", 60, 400) for day in range(4, 9)] + [log_row(9, "M", 60, 40)]
+        days, hours, cards = build_chart_tables(wrong, ["M"], today_number=10, settings=ChartSettings())
+        self.assertEqual(cards["M"], [400, 800, 1200, 1600, 2000, 2040])       # what the (wrong) log says
+        stored = self.stored_after_first_run(columns=("M",))
+        stored.cards.clear()
+        stored.cards.update({(day, "m"): 40 * (day - 3) for day in range(4, 9)})   # fixed by hand: 40 80 120 160 200
+        merged = merge_chart_data(days, hours, cards, ["M"], stored, ChartSettings(), overwrite=False)
+        self.assertEqual(merged.cards["M"], [40, 80, 120, 160, 200, 240])      # day 9 = 200 + 40, no jump to 2040
+
+    def test_untouched_numbers_are_not_adjusted_at_all(self):
+        """With nothing edited, new values are exactly what the log gives (no rounding drift)."""
+        rows = [log_row(4, "A", 70, 1), log_row(5, "A", 50, 1), log_row(6, "A", 20, 1)]
+        settings = ChartSettings()
+        first = build_chart_tables(rows[:2], ["A"], 5, settings)
+        stored_merge = merge_chart_data(*first, ["A"], None, settings, overwrite=False)
+        stored = read_stored_data(as_sheet_text(chart_grid(stored_merge.days, ["A"], stored_merge.hours,
+                                                           stored_merge.cards, mode_marker(settings))))
+        full = build_chart_tables(rows, ["A"], 6, settings)
+        merged = merge_chart_data(*full, ["A"], stored, settings, overwrite=False)
+        self.assertEqual(merged.hours["A"], full[1]["A"])
+
+    def test_per_day_values_never_depend_on_earlier_cells(self):
+        per_day = ChartSettings(hours_cumulative=False, cards_cumulative=False)
+        days, hours, cards = self.computed(today=7, settings=per_day)
+        stored = self.stored_after_first_run(today=5)
+        stored.hours_mode = stored.cards_mode = "per-day"
+        stored.hours[(5, "a")] = 99
+        merged = merge_chart_data(days, hours, cards, ["A"], stored, per_day, overwrite=False)
+        self.assertEqual(merged.hours["A"], [1, 99, 1.0])              # day 6 is just that day's hour
+
+    # --- late reports: the tab was written before the report arrived
+    ON_TIME = [log_row(4, "A", 60, 10), log_row(6, "A", 60, 5)]                  # nothing for day 5 (yet)
+    WITH_LATE = [log_row(4, "A", 60, 10), log_row(5, "A", 120, 20), log_row(6, "A", 60, 5)]
+
+    def stored_from(self, rows, settings, today=7):
+        days, hours, cards = build_chart_tables(rows, ["A"], today, settings)
+        merged = merge_chart_data(days, hours, cards, ["A"], None, settings, overwrite=False)
+        return read_stored_data(as_sheet_text(chart_grid(merged.days, ["A"], merged.hours, merged.cards,
+                                                         mode_marker(settings))))
+
+    def test_a_late_report_fills_the_empty_day_and_raises_the_running_totals_after_it(self):
+        settings = ChartSettings()
+        stored = self.stored_from(self.ON_TIME, settings)
+        self.assertEqual(stored.hours, {(4, "a"): 1, (5, "a"): 1, (6, "a"): 2})        # day 5 held "nothing"
+        days, hours, cards = build_chart_tables(self.WITH_LATE, ["A"], 7, settings)
+        merged = merge_chart_data(days, hours, cards, ["A"], stored, settings, overwrite=False)
+        self.assertEqual(merged.hours["A"], [1, 3, 4])                  # day 5 +2 h, and day 6 carries it on
+        self.assertEqual(merged.cards["A"], [10, 30, 35])
+        self.assertEqual(merged.late, {("A", 5): {"hours": 2.0, "cards": 20}})
+
+    def test_a_late_report_is_counted_once(self):
+        settings = ChartSettings()
+        days, hours, cards = build_chart_tables(self.WITH_LATE, ["A"], 7, settings)
+        first = merge_chart_data(days, hours, cards, ["A"], self.stored_from(self.ON_TIME, settings), settings, False)
+        again = read_stored_data(as_sheet_text(chart_grid(first.days, ["A"], first.hours, first.cards, mode_marker(settings))))
+        second = merge_chart_data(days, hours, cards, ["A"], again, settings, False)
+        self.assertEqual((second.hours, second.cards, second.late), (first.hours, first.cards, {}))
+
+    def test_a_late_report_in_per_day_mode_only_changes_its_own_day(self):
+        settings = ChartSettings(hours_cumulative=False, cards_cumulative=False)
+        stored = self.stored_from(self.ON_TIME, settings)
+        days, hours, cards = build_chart_tables(self.WITH_LATE, ["A"], 7, settings)
+        merged = merge_chart_data(days, hours, cards, ["A"], stored, settings, overwrite=False)
+        self.assertEqual(merged.hours["A"], [1, 2, 1])
+        self.assertEqual(merged.cards["A"], [10, 20, 5])
+        self.assertEqual(set(merged.late), {("A", 5)})
+
+    def test_a_day_without_any_report_is_not_a_late_report(self):
+        settings = ChartSettings()
+        stored = self.stored_from(self.ON_TIME, settings)
+        days, hours, cards = build_chart_tables(self.ON_TIME, ["A"], 7, settings)
+        merged = merge_chart_data(days, hours, cards, ["A"], stored, settings, overwrite=False)
+        self.assertEqual(merged.late, {})
+
+    def test_a_number_typed_by_hand_is_not_mistaken_for_a_late_report(self):
+        settings = ChartSettings()
+        stored = self.stored_from(self.WITH_LATE, settings)
+        stored.hours[(5, "a")] = 2                                      # corrected by hand (the log says 3)
+        days, hours, cards = build_chart_tables(self.WITH_LATE, ["A"], 7, settings)
+        merged = merge_chart_data(days, hours, cards, ["A"], stored, settings, overwrite=False)
+        self.assertEqual(merged.hours["A"][1], 2)
+        self.assertEqual(merged.late, {})
+
+    def test_tab_written_before_the_marker_existed_is_trusted(self):
+        grid = [["יום", "A", "", "יום", "A"], ["4", "1", "", "4", "10"]]
+        stored = read_stored_data(grid)
+        self.assertIsNone(stored.hours_mode)
+        days, hours, cards = self.computed(today=5)
+        merged = merge_chart_data(days, hours, cards, ["A"], stored, ChartSettings(), overwrite=False)
+        self.assertEqual(merged.hours["A"][0], 1)
+
+    def test_not_our_layout_is_ignored(self):
+        self.assertIsNone(read_stored_data([]))
+        self.assertIsNone(read_stored_data([["something", "else"]]))
+        self.assertIsNone(read_stored_data([["יום", "A", "B"]]))      # no second block
+
+    def test_decimal_commas_and_thousands_separators(self):
+        grid = [["יום", "A", "x", "יום", "A"], ["4", "2,08", "", "4", "1,234"]]
+        stored = read_stored_data(grid)
+        self.assertEqual(stored.hours[(4, "a")], 2.08)
+        self.assertEqual(stored.cards[(4, "a")], 1234)
 
 
 if __name__ == "__main__":

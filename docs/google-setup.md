@@ -45,7 +45,9 @@ The tab named by `worksheet` in `config.toml` (default `חשיפה`) holds one t
   has no named tables, the tool scans for the `曜日` marker instead and numbers the tables top to bottom.
 - The header texts must match the sheet columns you pick during `--setup`.
 - The tool also creates two tabs of its own: the **log** tab (`log_worksheet`) and the **chart data** tab
-  (`charts.data_worksheet`). Don't type in them - they are rewritten on every run.
+  (`charts.data_worksheet`). Both only ever *add*: a log row that exists is kept as it is (so you can correct
+  it by hand), and the chart data keeps every filled cell. To refresh a chart-data cell, clear it; to rebuild
+  the tab from the log, run with `--rebuild-charts`.
 
 ## 5. Try it
 
