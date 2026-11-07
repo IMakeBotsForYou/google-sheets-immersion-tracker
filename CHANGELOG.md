@@ -1,23 +1,23 @@
 # Changelog
 
-## Unreleased
+## 1.3.0
 
-- **Late reports now count.** A report that arrives after its day was already closed with ✖ used to be ignored
-  by the add-only rules: the cell stayed ✖ and the charts kept showing 0. Now, when the chat has a report for a
-  day the sheet holds as "nothing":
-  - the week table's **✖ is replaced by the ◯ count**;
-  - the **chart data** is filled in for that day, and the running totals after it are raised by the same amount;
-  - the run prints a **warning** for each (`late report(s) counted ...`); a dry run says what *would* be counted.
-
-  Everything else stays add-only: a ◯ cell, a log row, or a number in the chart data that someone corrected by
-  hand is still never replaced (only a cross, or a day the chart data holds as 0 hours / 0 cards while the log
-  has a report for it, counts as "nothing"). Once counted, the day is no longer "nothing", so it happens once.
-- Test: free text after a report ("...I'll finish Anki and read later") does not stop the report counting.
+- **Conjugations:** a report may contain an optional `הטיות 40` line (no unit needed). It is written to its own
+  tab (`הטיות`, tables named `הטיות שבוע 3`, `הטיות שבוע 4`, ... from week 3), one ◯ per 20 exercises, a ✖ below
+  that. Same layout and student columns as the main tab; add-only; skipped quietly if the tab is missing or
+  nobody uses the line. New `[conjugations]` settings.
+- **Free text inside a report** is ignored, and now produces a warning (naming the student) when it contains a
+  number or mentions an activity: a typo in an activity name can no longer silently cost a circle.
+- An absurd day number (such as `יום 29013890321890231890231`) used to crash the run with `OverflowError`; it is
+  now ignored with a warning and the day the message was sent is used.
+- When the add-only log keeps a row that disagrees with the chat, the run lists which rows
+  (`2026-10-27 Alice: the sheet has 275 min; the chat says ...`).
+- Every tab the tool writes to must now have its own name (validated), and the table-name regexes are validated.
 
 ## 1.2.1
 
 - Warnings name the student as in the sheet (the `people.json` name) instead of the WhatsApp sender, so a
-  phone number is shown as "Noam". Senders not saved yet are still shown as they appear in the chat.
+  phone number is shown as "Nora". Senders not saved yet are still shown as they appear in the chat.
 
 ## 1.2.0
 

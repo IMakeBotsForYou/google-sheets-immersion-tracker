@@ -44,6 +44,9 @@ The tab named by `worksheet` in `config.toml` (default `חשיפה`) holds one t
 - Name each table `week 1`, `week 2`, ... (Google Sheets: **Insert -> Table**, then rename it). If the sheet
   has no named tables, the tool scans for the `曜日` marker instead and numbers the tables top to bottom.
 - The header texts must match the sheet columns you pick during `--setup`.
+- *Optional:* a conjugations tab (default name `הטיות`) in the same layout, with the same student headers, and
+  its tables named `הטיות שבוע 3`, `הטיות שבוע 4`, ... (the numbers match the main tab's `week N`). You create
+  this one yourself, like the main tab; the tool only fills in its cells.
 - The tool also creates two tabs of its own: the **log** tab (`log_worksheet`) and the **chart data** tab
   (`charts.data_worksheet`). Both only ever *add*: a log row that exists is kept as it is (so you can correct
   it by hand), and the chart data keeps every filled cell. To refresh a chart-data cell, clear it; to rebuild

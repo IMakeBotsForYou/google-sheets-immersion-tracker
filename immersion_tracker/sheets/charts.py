@@ -6,15 +6,12 @@ Both charts get the same anchor column, offset and width, so they line up one ab
 
 The helper tab is add-only, like the circles in the week tables: a cell that already holds a number is
 never replaced, only empty cells are filled (new days, new students).  ``overwrite`` rebuilds it from the log.
-One exception - late reports: a day that the tab holds as "nothing" (0 hours / 0 new cards) while the log has a
-report for it was written before the report arrived.  Such a cell is filled in, and the running totals after it
-are raised by the same amount.  (A number someone typed by hand is never mistaken for this: it isn't "nothing".)
 """
 from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from itertools import accumulate
 from typing import Sequence
 
@@ -188,8 +185,6 @@ class MergedChartData:
     kept: int                           # cells that were already filled and were left alone
     added: int                          # cells filled in now
     notes: list[str]
-    late: dict[tuple[str, int], dict[str, float]] = field(default_factory=dict)
-    # ^ late reports counted: (student, day) -> {"hours": hours added, "cards": cards added}
 
 
 def merge_chart_data(days: list[int], hours: dict, cards: dict, columns: Sequence[str],
@@ -217,35 +212,17 @@ def merge_chart_data(days: list[int], hours: dict, cards: dict, columns: Sequenc
     all_days = sorted(set(days) | {day for day, _ in list(hours_keep) + list(cards_keep)})
     position = {day: i for i, day in enumerate(days)}
 
-    late: dict[tuple[str, int], dict[str, float]] = {}
-
-    def build(kind: str, computed: dict, keep: dict, cumulative: bool):
+    def build(computed: dict, keep: dict, cumulative: bool):
         merged, kept, added = {}, 0, 0
         for column in all_columns:
             key, values = normalize_name(column), []
             previous = None                 # the last number in this column (kept or new)
             previous_from_log = None        # what the log itself says for the previous day
-            shift = 0.0                     # running totals: what late reports added to the days after them
             for day in all_days:
                 from_log = computed[column][position[day]] if column in computed and day in position else None
-                # what the log says happened on this day itself
-                amount = None if from_log is None else from_log - (previous_from_log or 0) if cumulative else from_log
                 if (day, key) in keep:
                     value = keep[(day, key)]
                     kept += 1
-                    if isinstance(value, (int, float)):
-                        if cumulative and shift:
-                            value = round(value + shift, 2)
-                        held = value - (previous or 0) if cumulative else value     # what the tab holds for this day
-                        if amount is not None and amount > 0.011 and abs(held) <= 0.011:
-                            # The tab says "nothing" for a day the log has a report for: it was written before the
-                            # report arrived.  Count it, and raise the running totals after it by the same amount.
-                            counted = round((previous or 0) + amount, 2) if cumulative else amount
-                            shift += counted - value if cumulative else 0
-                            value = counted
-                            late.setdefault((column, day), {})[kind] = amount
-                            kept -= 1
-                            added += 1
                 elif from_log is None:
                     value = None
                 else:
@@ -262,25 +239,10 @@ def merge_chart_data(days: list[int], hours: dict, cards: dict, columns: Sequenc
             merged[column] = values
         return merged, kept, added
 
-    merged_hours, kept_hours, added_hours = build("hours", hours, hours_keep, settings.hours_cumulative)
-    merged_cards, kept_cards, added_cards = build("cards", cards, cards_keep, settings.cards_cumulative)
+    merged_hours, kept_hours, added_hours = build(hours, hours_keep, settings.hours_cumulative)
+    merged_cards, kept_cards, added_cards = build(cards, cards_keep, settings.cards_cumulative)
     return MergedChartData(all_days, all_columns, merged_hours, merged_cards,
-                           kept_hours + kept_cards, added_hours + added_cards, notes, late)
-
-
-def print_late_reports(late: dict[tuple[str, int], dict[str, float]]) -> None:
-    """Warn about the late reports merge_chart_data counted."""
-    if not late:
-        return
-    print(f"\nWARNING: {len(late)} late report(s) counted in the chart data - "
-          f"it still held nothing for a day the log has a report for:")
-    for (column, day), amounts in sorted(late.items(), key=lambda item: (item[0][1], item[0][0])):
-        parts = []
-        if "hours" in amounts:
-            parts.append(f"+{round(amounts['hours'] * 60)} min")
-        if "cards" in amounts:
-            parts.append(f"+{round(amounts['cards'])} Anki cards")
-        print(f"  * {column} day {day}: {', '.join(parts)}")
+                           kept_hours + kept_cards, added_hours + added_cards, notes)
 
 
 def line_chart_request(*, title: str, y_title: str, data_sheet_id: int, first_col: int, row_count: int,
@@ -352,7 +314,6 @@ def write_charts(spreadsheet, log_worksheet, log_rows: list[list], today_number:
     data_sheet.update(values=grid, range_name="A1", value_input_option="RAW")
     print(f"Chart data: kept {merged.kept} filled cells, added {merged.added} new ones"
           + "".join(f"\n  ({note})" for note in merged.notes))
-    print_late_reports(merged.late)
 
     # --- make sure the log tab has room (an anchor cell outside the grid is refused)
     anchor_column = chart_column(settings, log_column_count)

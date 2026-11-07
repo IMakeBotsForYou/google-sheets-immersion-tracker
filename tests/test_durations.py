@@ -1,6 +1,6 @@
 import unittest
 
-from immersion_tracker.durations import parse_card_count, parse_duration
+from immersion_tracker.durations import parse_card_count, parse_duration, parse_item_count
 
 
 class ParseDurationTests(unittest.TestCase):
@@ -30,6 +30,22 @@ class ParseCardCountTests(unittest.TestCase):
 
     def test_not_understood(self):
         self.assertIsNone(parse_card_count("הרבה"))
+
+
+
+class ParseItemCountTests(unittest.TestCase):
+    WORDS = ("הטיות", "הטיה", "תרגילים")
+
+    def test_understood(self):
+        cases = {"40": 40, "40 הטיות": 40, "הטיות 40": 40, "40+": 40, "25 תרגילים": 25, "0": 0, "אין": 0, "1,000": 1000}
+        for text, count in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(parse_item_count(text, self.WORDS), count)
+
+    def test_not_understood(self):
+        for text in ["הרבה", "", "כ-40"]:
+            with self.subTest(text=text):
+                self.assertIsNone(parse_item_count(text, self.WORDS))
 
 
 if __name__ == "__main__":

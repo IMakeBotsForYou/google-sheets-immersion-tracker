@@ -3,3 +3,6 @@
 day_1_date = 2026-10-22          # a Thursday
 skip_until_week = 2              # start writing on Day 4 = Sunday 25/10
 chat_timezone = "Asia/Jerusalem" # the sample chat was "exported" in Israel
+
+[conjugations]
+first_week = 2                   # the demo chat starts in week 2 (the real default is week 3)

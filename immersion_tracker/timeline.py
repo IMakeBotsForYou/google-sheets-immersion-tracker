@@ -53,6 +53,10 @@ class Calendar:
         """Date of the first row of the week-1 table (may be before Day #1)."""
         return day1 - timedelta(days=self.row_in_week_table(day1))
 
+    def week_start_date(self, day1: date, week: int) -> date:
+        """Date of the first row of week-table number `week` (week 1 = the one holding Day #1)."""
+        return self.week1_first_row_date(day1) + timedelta(days=7 * (week - 1))
+
     def skip_days_until_week(self, day1: date, week: int | None) -> int:
         """How many days from Day #1 until the first row of week-table number `week` (0 for week 1)."""
         if not week or week <= 1:

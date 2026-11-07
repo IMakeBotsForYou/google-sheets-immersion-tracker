@@ -9,7 +9,7 @@ from typing import Callable, Sequence
 from .console import print_table
 from .people import People
 from .reports import DayTotals, Report, ReportParser, circle_count, merge_reports
-from .settings import AppearanceSettings, ReportSettings
+from .settings import AppearanceSettings, ConjugationSettings, ReportSettings
 from .textutil import normalize_name
 from .timeline import WEEKDAY_SHORT, Calendar
 from .whatsapp import Message, message_stamp
@@ -145,8 +145,30 @@ def build_plan(day_totals: dict[tuple[str, date], DayTotals], columns: Sequence[
     return plan
 
 
+def build_conjugation_plan(day_totals: dict[tuple[str, date], DayTotals], columns: Sequence[str],
+                           first_day_to_write: date, today: date, conjugations: ConjugationSettings,
+                           appearance: AppearanceSettings) -> dict[tuple[str, date], SheetCell]:
+    """The conjugations tab: one ◯ per `per_circle` exercises (rounded down: 20 = ◯, 40 = ◯◯, 59 = ◯◯),
+    less than one circle = ✖ - once the day is over, like in the main tab (and a day with no conjugations
+    line, or no report at all, counts as zero)."""
+    last_day = max([today] + [day for _, day in day_totals])
+    plan: dict[tuple[str, date], SheetCell] = {}
+    day = first_day_to_write
+    while day <= last_day:
+        for column in columns:
+            totals = day_totals.get((column, day))
+            count = totals.conjugations if totals and totals.conjugations else 0
+            circles = count // conjugations.per_circle
+            if circles:
+                plan[(column, day)] = SheetCell(appearance.circle * circles, green=True)
+            elif day < today:       # the day is over and fewer than one circle's worth was reported
+                plan[(column, day)] = SheetCell(appearance.cross, green=False)
+        day += timedelta(days=1)
+    return plan
+
+
 def print_plan(plan: dict[tuple[str, date], SheetCell], columns: Sequence[str], day1: date,
-               first_day_to_write: date, calendar: Calendar) -> None:
+               first_day_to_write: date, calendar: Calendar, label: str = "week") -> None:
     """Preview of what will be written, one table per week ('-' = not touched, '.' = left alone)."""
     if not plan:
         print("Nothing to write.")
@@ -168,5 +190,5 @@ def print_plan(plan: dict[tuple[str, date], SheetCell], columns: Sequence[str], 
                     cell = plan.get((column, d))
                     row.append(cell.text if cell else ".")
             rows.append(row)
-        print(f"\n=== week {week + 1} ===")
+        print(f"\n=== {label} {week + 1} ===")
         print_table(headers, rows)

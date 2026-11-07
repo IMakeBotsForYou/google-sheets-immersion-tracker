@@ -113,6 +113,20 @@ line_width = 3
 # column = 10                 # first column (0 = A); leave out = right after the log table
 
 # ---------------------------------------------------------------------------
+[conjugations]
+# An optional line at the end of a report, e.g.   הטיות 40   (a unit after the number is optional).
+# It is not part of the immersion hours: it goes to a tab of its own, in the same layout as the week tables
+# and with the same student columns. Its tables are named "הטיות שבוע 3", "הטיות שבוע 4", ... with the
+# same week numbers as the main tab.
+# Nothing is written unless somebody reported such a line, and a sheet without the tab just skips it.
+enabled = true
+words = ["הטיות", "הטיה"]                        # words that can start the line
+worksheet = "הטיות"                               # the tab
+table_name_regex = '^\s*הטיות\s+שבוע\s*(\d+)\s*$'   # its tables; the number is the week
+first_week = 3                                   # the first week that has a table there; earlier days are not written
+per_circle = 20                                  # one ◯ per this many exercises, rounded down; less than one = ✖
+
+# ---------------------------------------------------------------------------
 [console]
 # Most Windows consoles don't support right-to-left text, so Hebrew shows up reversed. With this on,
 # Hebrew is re-ordered for display when printing to a terminal (nothing written to the sheet or to a

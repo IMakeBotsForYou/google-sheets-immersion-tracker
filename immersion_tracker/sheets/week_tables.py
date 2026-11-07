@@ -8,9 +8,9 @@ from typing import Sequence
 
 from ..errors import TrackerError
 from ..planning import SheetCell
-from ..settings import AppearanceSettings, SheetSettings
+from ..settings import AppearanceSettings, ConjugationSettings, SheetSettings
 from ..textutil import normalize_name
-from ..timeline import WEEKDAY_SHORT, Calendar
+from ..timeline import Calendar
 from .client import OpenSheet
 from .colors import hex_to_rgb
 
@@ -33,11 +33,11 @@ class SheetSnapshot:
 
 
 def find_week_blocks(values: list[list[str]], tables: list[dict] | None, sheet: SheetSettings,
-                     calendar: Calendar) -> dict[int, WeekBlock]:
+                     calendar: Calendar, name_regex: str | None = None, first_number: int = 1) -> dict[int, WeekBlock]:
     """{week number: block}.
 
-    Preferred: the sheet's tables named "week N" (see week_table_name_regex).
-    Fallback: scan for header_marker cells over the weekday labels, numbered 1, 2, 3... top to bottom.
+    Preferred: the sheet's tables whose name matches `name_regex` (default: week_table_name_regex, "week N").
+    Fallback: scan for header_marker cells over the weekday labels, numbered first_number, +1, +2... top to bottom.
     """
     def cell_text(row: int, col: int) -> str:
         return values[row][col].strip() if row < len(values) and col < len(values[row]) else ""
@@ -62,9 +62,9 @@ def find_week_blocks(values: list[list[str]], tables: list[dict] | None, sheet: 
 
     # --- preferred: tables named "week N"
     blocks: dict[int, WeekBlock] = {}
-    name_regex = re.compile(sheet.week_table_name_regex, re.I)
+    name_pattern = re.compile(name_regex or sheet.week_table_name_regex, re.I)
     for table in tables or []:
-        name_match = name_regex.match(table.get("name", ""))
+        name_match = name_pattern.match(table.get("name", ""))
         if not name_match:
             continue
         week_number = int(name_match.group(1))
@@ -87,19 +87,19 @@ def find_week_blocks(values: list[list[str]], tables: list[dict] | None, sheet: 
 
     # --- fallback: scan the cells for the header marker
     if tables:
-        print(f"  (no usable tables matching {sheet.week_table_name_regex!r}; "
+        print(f"  (no usable tables matching {name_regex or sheet.week_table_name_regex!r}; "
               f"scanning for '{sheet.header_marker}' headers instead)")
     for row in range(len(values)):
         for col in range(len(values[row])):
             if cell_text(row, col) == sheet.header_marker:
                 block = read_block(row, col, None, f"table at row {row + 1}")
                 if block:
-                    blocks[len(blocks) + 1] = block
+                    blocks[first_number + len(blocks)] = block
     return blocks
 
 
 def load_week_blocks(spreadsheet, worksheet, values: list[list[str]] | None, sheet: SheetSettings,
-                     calendar: Calendar) -> dict[int, WeekBlock]:
+                     calendar: Calendar, name_regex: str | None = None, first_number: int = 1) -> dict[int, WeekBlock]:
     tables: list[dict] = []
     try:
         metadata = spreadsheet.fetch_sheet_metadata(
@@ -109,7 +109,8 @@ def load_week_blocks(spreadsheet, worksheet, values: list[list[str]] | None, she
                 tables = entry.get("tables", [])
     except Exception as error:
         print(f"  (couldn't read table names from the sheet: {error})")
-    return find_week_blocks(values if values is not None else worksheet.get_all_values(), tables, sheet, calendar)
+    return find_week_blocks(values if values is not None else worksheet.get_all_values(), tables, sheet, calendar,
+                            name_regex, first_number)
 
 
 def read_snapshot(open_sheet: OpenSheet, sheet: SheetSettings, calendar: Calendar, required: bool,
@@ -126,6 +127,21 @@ def read_snapshot(open_sheet: OpenSheet, sheet: SheetSettings, calendar: Calenda
             raise TrackerError(f"Couldn't open the Google Sheet: {type(error).__name__}: {error}") from error
         print(f"(couldn't read the sheet - {type(error).__name__}: {error}\n {fallback_note})")
         return None
+
+
+def read_conjugation_snapshot(spreadsheet, conjugations: ConjugationSettings, sheet: SheetSettings,
+                              calendar: Calendar) -> SheetSnapshot | None:
+    """The conjugations tab, read like the main one.  None (with a note) if the sheet has no such tab."""
+    import gspread
+    try:
+        worksheet = spreadsheet.worksheet(conjugations.worksheet)
+    except gspread.WorksheetNotFound:
+        print(f"(no '{conjugations.worksheet}' tab in the sheet - conjugations not written)")
+        return None
+    values = worksheet.get_all_values()
+    blocks = load_week_blocks(spreadsheet, worksheet, values, sheet, calendar,
+                              conjugations.table_name_regex, conjugations.first_week)
+    return SheetSnapshot(spreadsheet, worksheet, values, blocks)
 
 
 def sheet_order(blocks: dict[int, WeekBlock]) -> list[str]:
@@ -155,54 +171,22 @@ def is_filled(text: str, marks: str) -> bool:
     return any(char in marks for char in text)
 
 
-def _current_text(values: list[list[str]], row: int, col: int) -> str:
-    return values[row][col] if row < len(values) and col < len(values[row]) else ""
-
-
-def late_report_cells(plan: dict[tuple[str, date], SheetCell], week1_start: date, snapshot: SheetSnapshot,
-                      appearance: AppearanceSettings) -> dict[tuple[str, date], tuple[str, str]]:
-    """Late reports: cells where the sheet shows a ✖ (nothing reported) although the chat now has a report
-    for that day.  A ✖ is only the tool's own "no report yet" mark, so these are replaced even though filled
-    cells are normally left alone.  -> {(student, day): (text in the sheet, text from the chat)}."""
-    late: dict[tuple[str, date], tuple[str, str]] = {}
-    for (column_name, day), cell in plan.items():
-        if not cell.green:
-            continue
-        week_index, row_in_week = divmod((day - week1_start).days, 7)
-        block = snapshot.blocks.get(week_index + 1)
-        col = block.column_by_student.get(normalize_name(column_name)) if block else None
-        if col is None:
-            continue
-        current = _current_text(snapshot.values, block.header_row + 1 + row_in_week, col)
-        if appearance.cross in current and appearance.circle not in current:
-            late[(column_name, day)] = (current.strip(), cell.text)
-    return late
-
-
-def print_late_reports(late: dict[tuple[str, date], tuple[str, str]], would: bool = False) -> None:
-    """The warning for late_report_cells.  `would`: a dry run, nothing has been written."""
-    if not late:
-        return
-    print(f"\nWARNING: {len(late)} late report(s) {'would be ' if would else ''}counted - "
-          f"the sheet already had ✖ for the day:")
-    for (student, day), (old, new) in sorted(late.items(), key=lambda item: (item[0][1], item[0][0])):
-        print(f"  * {student} {WEEKDAY_SHORT[day.weekday()]} {day:%d/%m}: {old} -> {new}")
-
-
 def write_week_tables(plan: dict[tuple[str, date], SheetCell], day1: date, overwrite: bool, snapshot: SheetSnapshot,
-                      sheet: SheetSettings, appearance: AppearanceSettings, calendar: Calendar):
-    """Write the plan into the week tables.  Returns the spreadsheet."""
+                      sheet: SheetSettings, appearance: AppearanceSettings, calendar: Calendar,
+                      tab_title: str | None = None, table_example: str = "week 1"):
+    """Write the plan into the week tables.  Returns the spreadsheet.
+    `tab_title` is only for the extra tabs (conjugations): their messages are tagged with it."""
     spreadsheet, worksheet, values, blocks = snapshot.spreadsheet, snapshot.worksheet, snapshot.values, snapshot.blocks
+    tag = f"[{tab_title}] " if tab_title else ""
     if not blocks:
         raise TrackerError(
-            f"No week tables found in '{sheet.worksheet}' (looking for tables named like 'week 1', "
-            f"or a '{sheet.header_marker}' header over "
+            f"{tag}No week tables found in '{tab_title or sheet.worksheet}' (looking for tables named like "
+            f"'{table_example}', or a '{sheet.header_marker}' header over "
             f"{''.join(calendar.expected_weekday_labels(sheet.weekday_labels))}). "
-            f"Check week_table_name_regex / weekday_labels in [sheet] and week_starts_on in [calendar] of config.toml.")
-    print(f"Found {len(blocks)} week tables (week {min(blocks)} - week {max(blocks)})")
+            f"Check the table names / weekday_labels in config.toml (and week_starts_on in [calendar]).")
+    print(f"{tag}Found {len(blocks)} week tables (week {min(blocks)} - week {max(blocks)})")
 
     week1_start = calendar.week1_first_row_date(day1)
-    late = late_report_cells(plan, week1_start, snapshot, appearance)
     requests = []
     skipped_filled = 0
     missing_weeks: set[int] = set()
@@ -218,20 +202,19 @@ def write_week_tables(plan: dict[tuple[str, date], SheetCell], day1: date, overw
             missing_columns.add(column_name)
             continue
         sheet_row = block.header_row + 1 + row_in_week
-        current = _current_text(values, sheet_row, col)
-        if not overwrite and is_filled(current, appearance.filled_cell_marks) and (column_name, day) not in late:
+        current = values[sheet_row][col] if sheet_row < len(values) and col < len(values[sheet_row]) else ""
+        if not overwrite and is_filled(current, appearance.filled_cell_marks):
             skipped_filled += 1
             continue
         requests.append(cell_update_request(worksheet.id, sheet_row, col, cell, appearance))
 
     if requests:
         spreadsheet.batch_update({"requests": requests})
-    print(f"Updated {len(requests)} cells.")
+    print(f"{tag}Updated {len(requests)} cells.")
     if skipped_filled:
-        print(f"Left {skipped_filled} cells alone that already had ◯ / ✖ in them (--overwrite to replace them).")
-    print_late_reports(late)
+        print(f"{tag}Left {skipped_filled} cells alone that already had ◯ / ✖ in them (--overwrite to replace them).")
     if missing_weeks:
-        print(f"WARNING: no table named 'week N' for N in {sorted(missing_weeks)} - those days were not written.")
+        print(f"{tag}WARNING: no table for week {sorted(missing_weeks)} - those days were not written.")
     if missing_columns:
-        print(f"WARNING: no column header matching {sorted(missing_columns)} - re-run --setup --all to fix.")
+        print(f"{tag}WARNING: no column header matching {sorted(missing_columns)} - re-run --setup --all to fix.")
     return spreadsheet

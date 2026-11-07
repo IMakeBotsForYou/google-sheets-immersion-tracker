@@ -88,7 +88,8 @@ def write_log(spreadsheet, rows: list[list], title: str, columns: Sequence[str],
         if old_row[0]:
             rows_by_key[(old_row[0], old_row[2])] = (
                 [old_row[0], restore_number(old_row[1]), old_row[2]] + [restore_number(x) for x in old_row[3:]])
-    added = kept = differing = 0
+    added = kept = 0
+    differences: list[tuple[list, list]] = []       # (row kept from the sheet, what the chat says now)
     for new_row in rows:
         key = (new_row[0], new_row[2])
         if key not in rows_by_key or overwrite:
@@ -96,7 +97,9 @@ def write_log(spreadsheet, rows: list[list], title: str, columns: Sequence[str],
             rows_by_key[key] = new_row
         else:
             kept += 1
-            differing += rows_by_key[key] != new_row        # the chat now says something else: we keep the sheet's
+            if rows_by_key[key] != new_row:             # the chat now says something else: we keep the sheet's
+                differences.append((rows_by_key[key], new_row))
+    differing = len(differences)
 
     column_order = {name: i for i, name in enumerate(columns)}
     all_rows = sorted(rows_by_key.values(), key=lambda r: (r[0], column_order.get(r[2], 99), r[2]))
@@ -109,4 +112,11 @@ def write_log(spreadsheet, rows: list[list], title: str, columns: Sequence[str],
           + (f" ({differing} differ from the chat - the sheet's values are kept; --overwrite to replace them)"
              if differing else "")
           + ("." if not overwrite else " (--overwrite: rows replaced by the chat's version)."))
+    if differences and not overwrite:
+        def describe(row: list) -> str:
+            return f"{row[-1]} min" + ("" if row[-2] == "" else f", {row[-2]} Anki cards")
+        for old_row, new_row in differences[:15]:
+            print(f"  - {old_row[0]} {old_row[2]}: the sheet has {describe(old_row)}; the chat says {describe(new_row)}")
+        if differing > 15:
+            print(f"  ... and {differing - 15} more")
     return worksheet, all_rows

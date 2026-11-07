@@ -83,6 +83,18 @@ class ChartSettings:
 
 
 @dataclass(frozen=True)
+class ConjugationSettings:
+    """Optional "הטיות 40" line of a report: how many conjugation exercises, kept in a tab of its own."""
+    enabled: bool = True                    # read the line and write the tab (skipped quietly if the chat never uses it
+                                            # or the sheet has no such tab)
+    words: tuple[str, ...] = ("הטיות", "הטיה")      # words that can start the line (a unit after the number is optional)
+    worksheet: str = "הטיות"                 # the tab; same layout as the week tables, same student columns
+    table_name_regex: str = r"^\s*הטיות\s+שבוע\s*(\d+)\s*$"    # its tables are named "הטיות שבוע 3", "הטיות שבוע 4"...
+    first_week: int = 3                     # the number of the first week that has a table there; earlier days are not written
+    per_circle: int = 20                    # exercises per ◯ (rounded down); less than one circle = ✖
+
+
+@dataclass(frozen=True)
 class ConsoleSettings:
     bidi_fix: bool = True                   # reorder Hebrew for terminals without right-to-left support
     pause_on_exit: bool = True              # "Press Enter to exit" when run interactively
@@ -95,6 +107,7 @@ class Settings:
     sheet: SheetSettings = field(default_factory=SheetSettings)
     appearance: AppearanceSettings = field(default_factory=AppearanceSettings)
     charts: ChartSettings = field(default_factory=ChartSettings)
+    conjugations: ConjugationSettings = field(default_factory=ConjugationSettings)
     console: ConsoleSettings = field(default_factory=ConsoleSettings)
 
 
@@ -208,7 +221,7 @@ def _build(cls, table: Mapping[str, Any], section: str, converters: Mapping[str,
 
 def settings_from_table(table: Mapping[str, Any]) -> Settings:
     """Settings from an already-parsed TOML document."""
-    sections = {"calendar", "reports", "sheet", "appearance", "charts", "console"}
+    sections = {"calendar", "reports", "sheet", "appearance", "charts", "conjugations", "console"}
     unknown = sorted(set(table) - sections)
     if unknown:
         raise ConfigError(f"config: unknown section(s): {', '.join(unknown)}  (known: {', '.join(sorted(sections))})")
@@ -233,6 +246,9 @@ def settings_from_table(table: Mapping[str, Any]) -> Settings:
             "hours_cumulative": _boolean, "cards_cumulative": _boolean,
             "width_px": _positive_int, "height_px": _positive_int, "gap_px": _non_negative_int,
             "line_width": _positive_int, "column": _non_negative_int}),
+        conjugations=_build(ConjugationSettings, table.get("conjugations", {}), "conjugations", {
+            "enabled": _boolean, "words": _as_text_tuple, "worksheet": _text, "table_name_regex": _text,
+            "first_week": _positive_int, "per_circle": _positive_int}),
         console=_build(ConsoleSettings, table.get("console", {}), "console", {
             "bidi_fix": _boolean, "pause_on_exit": _boolean}),
     )
@@ -242,6 +258,22 @@ def settings_from_table(table: Mapping[str, Any]) -> Settings:
     if settings.sheet.log_worksheet and normalize_name(settings.sheet.log_worksheet) == normalize_name(settings.sheet.worksheet):
         raise ConfigError(f"config: log_worksheet ({settings.sheet.log_worksheet!r}) is the same tab as worksheet - "
                           f"the log needs its own tab. Give it another name or leave it empty.")
+    tabs = {"[sheet] worksheet": settings.sheet.worksheet, "[sheet] log_worksheet": settings.sheet.log_worksheet,
+            "[charts] data_worksheet": settings.charts.data_worksheet,
+            "[conjugations] worksheet": settings.conjugations.worksheet if settings.conjugations.enabled else None}
+    seen: dict[str, str] = {}
+    for label, name in tabs.items():
+        if name and normalize_name(name) in seen:
+            raise ConfigError(f"config: {label} and {seen[normalize_name(name)]} are both {name!r} - "
+                              f"every tab the tool writes to needs its own name.")
+        if name:
+            seen[normalize_name(name)] = label
+    for label, pattern in (("[sheet] week_table_name_regex", settings.sheet.week_table_name_regex),
+                           ("[conjugations] table_name_regex", settings.conjugations.table_name_regex)):
+        try:
+            re.compile(pattern)
+        except re.error as error:
+            raise ConfigError(f"config: {label} is not a valid regular expression: {error}") from None
     return settings
 
 

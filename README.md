@@ -15,6 +15,7 @@ reports (even *"שעה וחצי"* and *"1 שעה ו-20 דקות"*), and keeps a 
 
 - ◯ **circles** for every day someone put in the time, a red ✖ once a day is over with nothing reported
 - 📒 a **log tab** with the full breakdown per student and day: watching, reading, listening, reels, Anki cards
+- 🔤 an optional **conjugations tab**: one ◯ per 20 exercises, a ✖ below that
 - 📈 **two live charts**: hours of immersion and new Anki cards, one line per student
 - 🧠 it **follows your sheet**: students are listed in the order of your sheet's columns, and it never overwrites what is already in the sheet (the week-table cells, the log rows, the chart data), so your manual corrections stay
 
@@ -41,7 +42,8 @@ Found 25 valid reports
 Leaving Day 1-3 untouched - writing from Day 4 (2026-10-25)
 Now: 2026-11-01 12:00 (Asia/Jerusalem) -> current day is 2026-11-01; days end at 05:00, so ✖ is given to days before 2026-11-01
 
---- 1 warning(s) ---
+--- 2 warning(s) ---
+ * 2026-10-27 20:17 (Israel 10-27 20:17) Alice: ignored a line that isn't a report line (not counted): 'אולי אוסיף עוד קצת אנקי בלילה'
  * 2026-10-28 22:05 (Israel 10-28 22:05) Dan: couldn't read the צפייה duration 'כמה שיכולתי'  [סיכום יום 7]
 
 === week 2 ===
@@ -51,9 +53,17 @@ Alice | ◯◯◯◯      | ◯◯        | ◯◯◯◯      | ◯◯◯       
 Ben   | ◯         | ◯◯        | ◯◯        | ◯◯        | ◯         | ◯◯◯       | ◯◯
 Chloe | ◯◯        | ◯◯◯◯      | ✖         | ◯◯◯◯      | ◯◯◯       | ◯◯◯◯◯     | ◯◯◯◯◯◯
 Dan   | ◯         | ◯         | ◯         | ✖         | ✖         | ◯         | ◯
+
+=== הטיות שבוע 2 ===
+תלמיד | Sun 25/10 | Mon 26/10 | Tue 27/10 | Wed 28/10 | Thu 29/10 | Fri 30/10 | Sat 31/10
+------+-----------+-----------+-----------+-----------+-----------+-----------+----------
+Alice | ◯◯        | ✖         | ✖         | ◯         | ◯         | ◯◯        | ✖
+Ben   | ✖         | ◯         | ◯         | ✖         | ◯◯        | ✖         | ◯
+Chloe | ◯◯        | ◯◯◯       | ✖         | ◯         | ◯◯◯       | ✖         | ◯◯
+Dan   | ✖         | ✖         | ✖         | ✖         | ✖         | ◯◯        | ◯◯◯
 ```
 
-`--offline` never contacts Google. The sample chat is fictional. Warnings name the student (the name from your sheet), never a phone number. Note how Dan's unreadable line
+`--offline` never contacts Google. The sample chat is fictional; its demo config uses `first_week = 2`. Warnings name the student (the name from your sheet), never a phone number. Note how Dan's unreadable line
 (`צפייה כמה שיכולתי`, "as much as I could") is reported as a warning instead of being silently guessed, and
 earns a ✖ for that day.
 
@@ -87,9 +97,33 @@ Students send a message like this. A number without a unit means minutes; missin
 | `שמיעה חצי שעה` | listening (`שמיעה פסיבית` is added to it) |
 | `רילז 10 דקות` | reels |
 | `אנקי 20 קלפים` | *optional*: new Anki cards. Logged and charted, but not part of the time |
+| `הטיות 40` | *optional*: conjugation exercises (no unit needed). Goes to its own tab, not part of the time |
 
 Understood durations: `10 דקות`, `1 שעה`, `1.5 שעות`, `1:35`, `90`, `שעה וחצי`, `רבע שעה`, `2 שעות וחצי`...
 The activity names and their aliases are configurable (see [`config.example.toml`](config.example.toml)).
+
+Any other line in a report is ignored, but if it might have carried data (it contains a number or mentions an
+activity) you get a warning that names the student, so a typo like `קריאת 20 דקות` or a comment such as
+*"I'll add more Anki tonight"* can't silently cost anyone their circle. An absurd day number
+(`יום 29013890321890231890231`) is ignored with a warning and the day the message was sent is used instead.
+
+### The conjugations tab
+
+A report may end with a line like `הטיות 40`. It is kept apart from the immersion hours, in its own tab:
+
+| Exercises | Cell |
+|---|---|
+| 20-39 | ◯ |
+| 40-59 | ◯◯ |
+| 60-79 | ◯◯◯ ... (one more circle for every 20, rounded down) |
+| less than 20, or no `הטיות` line, or no report | ✖ (once the day is over, exactly like the main tab) |
+
+The tab (`[conjugations] worksheet`, default `הטיות`) has the same layout as the week tables and the same
+student columns. Its tables are named **`הטיות שבוע 3`**, `הטיות שבוע 4`, ... and the numbering is the same as
+in the main tab, so `הטיות שבוע 3` covers the same days as `week 3`. The first week that has a table there is
+`first_week` (3): earlier days are never written. Like everywhere else, filled cells are left alone unless you
+pass `--overwrite`. Nothing is written until at least one report in the chat contains a `הטיות` line, and a
+sheet without that tab simply skips it with a note. Switch it off with `[conjugations] enabled = false`.
 
 ## Quick start
 
@@ -175,6 +209,7 @@ Every key is optional; unknown keys are rejected so a typo can't silently do not
 | `[sheet]` | tab names, how week tables are found, weekday labels |
 | `[appearance]` | circle / cross characters, colours, whether filled cells may be overwritten |
 | `[charts]` | on/off, running total vs per day, size and position |
+| `[conjugations]` | the `הטיות` line: its words, the tab and table names, first week, exercises per circle |
 | `[console]` | Hebrew display fix for terminals, "press Enter" pause |
 
 <details>
@@ -247,6 +282,7 @@ what is new, and leaves the rest alone.
 | Where | What | Fixing a mistake |
 |---|---|---|
 | Sheet, week tab | the ◯ / ✖ cells | edit the cell (it is never overwritten) |
+| Sheet, conjugations tab | the ◯ / ✖ cells for the `הטיות` line | edit the cell (it is never overwritten) |
 | Sheet, **log tab** | one row per student and day: the source of truth for the charts | edit the row (it is never overwritten) |
 | Sheet, chart data tab | the numbers behind the two charts | edit or clear a cell; `--rebuild-charts` rebuilds the tab from the log |
 | `people.json` (project folder) | who is who: WhatsApp name -> sheet column | `--setup`, or edit the file |
@@ -257,13 +293,6 @@ what is new, and leaves the rest alone.
 (or the cell in the week table). It stays fixed on every later run, even though the chat still says 400. Then
 run with `--rebuild-charts` so the charts pick the corrected log up. Use `--overwrite` only when you want the
 sheet reset to what the chat says. Use *Version history* in Google Sheets if you want to go back in time.
-
-**Late reports.** The tool marks a finished day without a report with ✖ (and 0 in the chart data). If the report
-arrives *after* that - say a student posts Friday's summary on Saturday evening - the next run counts it anyway:
-the ✖ becomes ◯, the chart data for that day is filled in (later running totals are raised by the same amount),
-and the run prints a warning, e.g. `Chloe Fri 30/10: ✖ -> ◯◯◯◯◯` and `Chloe day 9: +335 min, +34 Anki cards`.
-A dry run shows the same warning as "would be counted". Only a ✖ (or a day the chart data holds as 0 while the log
-has a report for it) is replaced - a ◯ cell, a log row or a chart number you corrected by hand stays as it is.
 
 ## Security and privacy
 

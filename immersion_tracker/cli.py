@@ -15,14 +15,15 @@ from .credentials import load_credentials, load_dotenv
 from .errors import TrackerError
 from .paths import CONFIG_FILE, ENV_FILE, PEOPLE_FILE, project_root
 from .people import People
-from .planning import build_plan, collect_day_totals, gather_reports, infer_day1, print_plan
+from .planning import (build_conjugation_plan, build_plan, collect_day_totals, gather_reports, infer_day1,
+                       print_plan)
 from .reports import ReportParser
 from .settings import Settings, load_settings, parse_time_of_day
 from .setup_wizard import read_sheet_headers, setup_people
 from .sheets.charts import print_chart_colors, write_charts
 from .sheets.client import make_sheet_opener
 from .sheets.log import build_log_rows, log_columns, print_last_day_per_student, print_log, write_log
-from .sheets.week_tables import late_report_cells, print_late_reports, read_snapshot, sheet_order, write_week_tables
+from .sheets.week_tables import read_conjugation_snapshot, read_snapshot, sheet_order, write_week_tables
 from .textutil import normalize_name
 from .timeline import WEEKDAY_SHORT, Calendar
 from .whatsapp import parse_chat
@@ -107,7 +108,9 @@ def run(args: argparse.Namespace) -> Settings:
 
     calendar = Calendar(settings.calendar)
     people = People.load(args.people or root / PEOPLE_FILE)
-    parser = ReportParser(settings.reports.activities, settings.reports.anki_words)
+    conjugations = settings.conjugations
+    parser = ReportParser(settings.reports.activities, settings.reports.anki_words,
+                          conjugations.words if conjugations.enabled else ())
     messages = parse_chat(args.chat, calendar, args.date_order)
 
     now = args.today or calendar.now()
@@ -183,11 +186,18 @@ def run(args: argparse.Namespace) -> Settings:
     log_rows = build_log_rows(day_totals, day1, columns, activities) if log_title else []
     print_plan(plan, columns, day1, first_day_to_write, calendar)          # the table is shown on every run
 
+    # The conjugations tab: only if somebody actually reported a "הטיות" line (otherwise every finished day would
+    # turn into a red cross for everybody), and never before its first week.
+    conjugation_plan: dict = {}
+    conjugation_first_day = max(first_day_to_write, calendar.week_start_date(day1, conjugations.first_week))
+    if conjugations.enabled and any(totals.conjugations is not None for totals in day_totals.values()):
+        conjugation_plan = build_conjugation_plan(day_totals, columns, conjugation_first_day, today, conjugations,
+                                                  settings.appearance)
+        print_plan(conjugation_plan, columns, day1, conjugation_first_day, calendar,
+                   label=f"{conjugations.words[0]} שבוע")
+
     overwrite = args.overwrite or settings.appearance.overwrite_filled_cells
     if dry_run:
-        if snapshot and snapshot.blocks:        # a late report would replace a ✖ that is already in the sheet
-            print_late_reports(late_report_cells(plan, calendar.week1_first_row_date(day1), snapshot,
-                                                 settings.appearance), would=True)
         if not overwrite:
             print("\n(when writing, cells that already hold ◯ / ✖ in the sheet are left untouched)")
         if log_rows:
@@ -197,6 +207,15 @@ def run(args: argparse.Namespace) -> Settings:
         return settings
 
     spreadsheet = write_week_tables(plan, day1, overwrite, snapshot, settings.sheet, settings.appearance, calendar)
+    if conjugation_plan:
+        conjugation_snapshot = read_conjugation_snapshot(spreadsheet, conjugations, settings.sheet, calendar)
+        if conjugation_snapshot:
+            try:
+                write_week_tables(conjugation_plan, day1, overwrite, conjugation_snapshot, settings.sheet,
+                                  settings.appearance, calendar, tab_title=conjugations.worksheet,
+                                  table_example=f"{conjugations.words[0]} שבוע {conjugations.first_week}")
+            except TrackerError as error:       # the main update is already done - don't fail the whole run
+                print(f"WARNING: {error}")
     logged = write_log(spreadsheet, log_rows, log_title, columns, log_header, overwrite=overwrite) if log_rows else None
     if logged:
         log_worksheet, all_log_rows = logged

@@ -47,6 +47,25 @@ class SettingsTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             settings_from_table({"sheet": {"worksheet": "Tab", "log_worksheet": " tab "}})
 
+    def test_conjugation_defaults_and_overrides(self):
+        defaults = Settings().conjugations
+        self.assertEqual((defaults.worksheet, defaults.first_week, defaults.per_circle), ("הטיות", 3, 20))
+        self.assertEqual(defaults.words, ("הטיות", "הטיה"))
+        custom = settings_from_table({"conjugations": {"first_week": 5, "per_circle": 10, "enabled": False}}).conjugations
+        self.assertEqual((custom.first_week, custom.per_circle, custom.enabled), (5, 10, False))
+
+    def test_bad_conjugation_values(self):
+        for table in ({"conjugations": {"per_circle": 0}}, {"conjugations": {"first_week": "three"}},
+                      {"conjugations": {"circle_size": 20}}, {"conjugations": {"table_name_regex": "("}}):
+            with self.subTest(table=table), self.assertRaises(ConfigError):
+                settings_from_table(table)
+
+    def test_every_tab_needs_its_own_name(self):
+        for table in ({"conjugations": {"worksheet": "חשיפה"}}, {"charts": {"data_worksheet": "יומן חשיפה"}}):
+            with self.subTest(table=table), self.assertRaises(ConfigError):
+                settings_from_table(table)
+        settings_from_table({"conjugations": {"worksheet": "חשיפה", "enabled": False}})     # a disabled feature may reuse a name
+
     def test_empty_log_worksheet_disables_the_log(self):
         self.assertIsNone(settings_from_table({"sheet": {"log_worksheet": ""}}).sheet.log_worksheet)
 

@@ -94,6 +94,24 @@ def make_book(student_order, filled=None):
     book.sheets.append(ws)
     return book
 
+def add_week_tab(book, title, student_order, first_week, weeks, name_template="{week}"):
+    """A second tab of week tables (e.g. conjugations: tables named "הטיות שבוע 3", "הטיות שבוע 4"...)."""
+    tab = FakeWorksheet(title, rows=300, cols=14)
+    tab.tables = []
+    labels = ["日", "月", "火", "水", "木", "金", "土"]
+    for index in range(weeks):
+        top = index * 9
+        tab.grid[(top, 0)] = "曜日"
+        for i, name in enumerate(student_order):
+            tab.grid[(top, 1 + i)] = name
+        for d, label in enumerate(labels):
+            tab.grid[(top + 1 + d, 0)] = label
+        tab.tables.append({"tableId": f"{title}{index}", "name": name_template.format(week=first_week + index),
+                           "range": {"startRowIndex": top, "startColumnIndex": 0, "endColumnIndex": 1 + len(student_order)}})
+    book.sheets.append(tab)
+    return tab
+
+
 def install(book):
     import sys, types
     mod = types.ModuleType("gspread")

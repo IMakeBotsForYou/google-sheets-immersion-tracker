@@ -2,7 +2,6 @@
 import contextlib
 import io
 import os
-import re
 import sys
 import tempfile
 import unittest
@@ -15,7 +14,6 @@ from immersion_tracker import cli
 ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES = ROOT / "examples"
 TODAY = ["--today", "2026-11-01 12:00"]
-EARLY_TODAY = ["--today", "2026-10-31 12:00"]
 BASE_ARGS = [str(EXAMPLES / "sample_chat.txt"), "--config", str(EXAMPLES / "demo.toml"),
              "--people", str(EXAMPLES / "demo_people.json"), "--no-pause"]
 
@@ -35,14 +33,16 @@ class CliTestCase(unittest.TestCase):
             os.environ.pop(key, None)
 
     def run_cli(self, *extra, expect_exit=False, chat=None):
-        args = BASE_ARGS if chat is None else [str(chat)] + BASE_ARGS[1:]
+        args = BASE_ARGS + list(extra)
+        if chat:
+            args[0] = str(chat)
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             if expect_exit:
                 with self.assertRaises(SystemExit) as caught:
-                    cli.main(args + list(extra))
+                    cli.main(args)
                 return output.getvalue(), caught.exception.code
-            cli.main(args + list(extra))
+            cli.main(args)
         return output.getvalue(), None
 
     def install_sheet(self, student_order):
@@ -94,64 +94,6 @@ class WritingTests(CliTestCase):
         output, _ = self.run_cli(*TODAY, "--dry-run")
         self.assertEqual(self.names_in_order(output, ["Ben", "Dan", "Alice", "Chloe"], "=== week 2 ==="),
                          ["Ben", "Dan", "Alice", "Chloe"])
-
-
-class LateReportTests(CliTestCase):
-    """A report that arrives after its day was already closed with ✖ still counts - with a warning."""
-    ORDER = ["Alice", "Ben", "Chloe", "Dan"]
-
-    def setUp(self):
-        super().setUp()
-        self.install_sheet(self.ORDER)
-        full = (EXAMPLES / "sample_chat.txt").read_text(encoding="utf-8")
-        chloe_day_9 = re.compile(r"^\[10/\d+/26, [^\]]+\] Chloe Mizrahi: סיכום יום 9\n(?:(?!\[\d).*\n)*", re.M)
-        self.assertRegex(full, chloe_day_9)
-        self.full_chat, self.early_chat = self.home / "full.txt", self.home / "early.txt"
-        self.full_chat.write_text(full, encoding="utf-8")
-        self.early_chat.write_text(chloe_day_9.sub("", full), encoding="utf-8")     # she hasn't posted day 9 yet
-
-    def chloe_cell(self):
-        return self.tab("חשיפה").grid[(9 + 1 + 5, 1 + self.ORDER.index("Chloe"))]    # week 2, Friday 30/10 = day 9
-
-    def chart(self, day, block):
-        grid = self.tab("נתוני גרפים").get_all_values()
-        start = 1 if block == "hours" else grid[0].index("יום", 1) + 1
-        row = next(r for r in grid if r and r[0] == str(day))
-        return float(row[start + grid[0][start:].index("Chloe")])
-
-    def test_a_late_report_counts_in_the_week_table_and_the_chart_data_with_a_warning(self):
-        self.run_cli(*EARLY_TODAY, chat=self.early_chat)
-        self.assertEqual(self.chloe_cell(), "✖")                       # day 9 closed with nothing reported
-        hours_before = {day: self.chart(day, "hours") for day in (8, 9, 10)}
-        cards_before = {day: self.chart(day, "cards") for day in (8, 9, 10)}
-
-        output, _ = self.run_cli(*TODAY, chat=self.full_chat)         # ...and now her report is in the chat
-        self.assertEqual(self.chloe_cell(), "◯◯◯◯◯")                  # 335 minutes
-        self.assertIn("late report(s) counted - the sheet already had ✖", output)
-        self.assertIn("Chloe Fri 30/10: ✖ -> ◯◯◯◯◯", output)
-        self.assertIn("Chloe day 9: +335 min, +34 Anki cards", output)
-        for day in (9, 10):                                            # day 9 itself, and the totals after it
-            self.assertAlmostEqual(self.chart(day, "hours"), hours_before[day] + 335 / 60, delta=0.02)   # sheet shows 2 decimals
-            self.assertEqual(self.chart(day, "cards"), cards_before[day] + 34)
-        self.assertEqual(self.chart(8, "hours"), hours_before[8])      # earlier days untouched
-
-    def test_it_is_counted_once_and_a_third_run_changes_nothing(self):
-        self.run_cli(*EARLY_TODAY, chat=self.early_chat)
-        self.run_cli(*TODAY, chat=self.full_chat)
-        snapshot = {t.title: dict(t.grid) for t in self.book.sheets}
-        output, _ = self.run_cli(*TODAY, chat=self.full_chat)
-        self.assertNotIn("late report", output)
-        self.assertEqual({t.title: dict(t.grid) for t in self.book.sheets}, snapshot)
-
-    def test_a_dry_run_says_what_would_happen_and_writes_nothing(self):
-        self.run_cli(*EARLY_TODAY, chat=self.early_chat)
-        output, _ = self.run_cli(*TODAY, "--dry-run", chat=self.full_chat)
-        self.assertIn("1 late report(s) would be counted", output)
-        self.assertEqual(self.chloe_cell(), "✖")
-
-    def test_a_cross_with_no_report_behind_it_is_left_alone(self):
-        output, _ = self.run_cli(*TODAY, chat=self.early_chat)
-        self.assertNotIn("late report", output)
 
 
 class ChartDataIsAddOnlyTests(CliTestCase):
@@ -264,6 +206,8 @@ class LogIsAddOnlyTests(CliTestCase):
         output, _ = self.run_cli(*TODAY)
         self.assertEqual(self.log()[row][col], str(original + 1000))     # not reset to what the chat says
         self.assertIn("1 differ from the chat", output)
+        self.assertIn(f"2026-10-27 Alice: the sheet has", output)
+        self.assertIn(f"{original + 1000} Anki cards; the chat says", output)
         # a student's chart data is rebuilt from the corrected log
         self.run_cli(*TODAY, "--rebuild-charts")
         data = self.tab("נתוני גרפים").get_all_values()
@@ -308,6 +252,90 @@ class LogIsAddOnlyTests(CliTestCase):
         day10 = next(r for r in data if r and r[0] == "10")
         self.assertEqual(day10[chloe], str(10 + 34 + 44))                # 10 + the log's cards for days 9 and 10
         self.assertEqual(day9[chloe], str(10 + 34))
+
+
+class ConjugationTabTests(CliTestCase):
+    """"הטיות 40" lines go to a tab of their own: 20 = one circle, 40 = two, less than 20 = a cross."""
+    ORDER = ["Alice", "Ben", "Chloe", "Dan"]
+    TITLE = "הטיות"
+
+    def setUp(self):
+        super().setUp()
+        self.install_sheet(self.ORDER)
+
+    def add_tab(self):
+        return fake_gspread.add_week_tab(self.book, self.TITLE, self.ORDER, first_week=2, weeks=2,
+                                         name_template="הטיות שבוע {week}")
+
+    def cell(self, tab, student, day_of_october):
+        """Row 1 of the first table is Sunday 25/10 (the demo's week 2)."""
+        return tab.grid.get((1 + day_of_october - 25, 1 + self.ORDER.index(student)))
+
+    def test_circles_and_crosses_are_written(self):
+        tab = self.add_tab()
+        output, _ = self.run_cli(*TODAY)
+        self.assertEqual(self.cell(tab, "Alice", 25), "◯◯")        # 40-59 exercises
+        self.assertEqual(self.cell(tab, "Alice", 26), "✖")          # below 20 (or no line)
+        self.assertEqual(self.cell(tab, "Chloe", 31), "◯◯")
+        self.assertEqual(self.cell(tab, "Dan", 31), "◯◯◯")          # 60+
+        self.assertEqual(self.cell(tab, "Chloe", 27), "✖")          # Chloe sent no report that day
+        self.assertIn("[הטיות] Updated", output)
+        self.assertEqual(self.tab("חשיפה").grid[(10, 1)], "◯◯◯◯")    # the main tab is unchanged
+
+    def test_filled_cells_are_left_alone_unless_overwrite(self):
+        tab = self.add_tab()
+        tab.grid[(1, 1)] = "◯◯◯◯◯"
+        self.run_cli(*TODAY)
+        self.assertEqual(tab.grid[(1, 1)], "◯◯◯◯◯")
+        self.run_cli(*TODAY, "--overwrite")
+        self.assertEqual(tab.grid[(1, 1)], "◯◯")
+
+    def test_a_missing_tab_is_not_fatal(self):
+        output, _ = self.run_cli(*TODAY)
+        self.assertIn("no 'הטיות' tab in the sheet", output)
+        self.assertEqual(self.tab("חשיפה").grid[(10, 1)], "◯◯◯◯")    # everything else was still written
+        self.assertEqual(len(self.book.charts), 2)
+
+    def test_tables_that_dont_exist_yet_are_reported_not_fatal(self):
+        tab = fake_gspread.add_week_tab(self.book, self.TITLE, self.ORDER, first_week=3, weeks=1,
+                                        name_template="הטיות שבוע {week}")        # nothing for week 2
+        output, _ = self.run_cli(*TODAY)
+        self.assertIn("no table for week [2]", output)
+        self.assertEqual(self.tab("חשיפה").grid[(10, 1)], "◯◯◯◯")
+
+    def test_a_chat_without_any_conjugation_line_writes_nothing_there(self):
+        chat = self.home / "plain.txt"
+        chat.write_text("".join(line for line in (EXAMPLES / "sample_chat.txt").read_text(encoding="utf-8").splitlines(True)
+                                if not line.startswith("הטיות")), encoding="utf-8")
+        tab = self.add_tab()
+        output, _ = self.run_cli(*TODAY, chat=chat)
+        self.assertEqual(tab.grid.get((1, 1)), None)                 # not even crosses: nobody uses the feature
+        self.assertNotIn("הטיות שבוע", output)
+
+    def test_it_can_be_switched_off(self):
+        config = self.home / "off.toml"
+        config.write_text((EXAMPLES / "demo.toml").read_text(encoding="utf-8").replace("first_week = 2", "enabled = false"),
+                          encoding="utf-8")
+        tab = self.add_tab()
+        output, _ = self.run_cli(*TODAY, "--config", str(config))
+        self.assertEqual(tab.grid.get((1, 1)), None)
+        self.assertNotIn("הטיות שבוע", output)
+
+    def test_the_dry_run_previews_the_tab_without_the_sheet(self):
+        sys.modules["gspread"] = None
+        output, _ = self.run_cli(*TODAY, "--offline")
+        self.assertIn("=== הטיות שבוע 2 ===", output)
+        self.assertEqual(self.names_in_order(output, ["Alice", "Ben", "Chloe", "Dan"], "=== הטיות שבוע 2 ==="),
+                         ["Alice", "Ben", "Chloe", "Dan"])
+
+
+class WarningTests(CliTestCase):
+    def test_free_text_in_a_report_is_ignored_with_a_named_warning(self):
+        sys.modules["gspread"] = None
+        output, _ = self.run_cli(*TODAY, "--offline")
+        self.assertIn("Alice: ignored a line that isn't a report line (not counted)", output)
+        self.assertIn("אולי אוסיף עוד קצת אנקי בלילה", output)
+        self.assertNotIn("Alice Cohen", output)
 
 
 class DryRunTests(CliTestCase):

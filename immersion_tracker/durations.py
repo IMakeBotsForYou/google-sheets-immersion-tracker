@@ -8,6 +8,7 @@ Words work too (the "ו" / "ו-" in front is always optional):
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 # Duration pieces.  Units: שעה/שעות/ש = hours, דקה/דקות/ד = minutes.
 _UNIT = r"(?:שעות|שעה|ש|דקות|דקה|ד)['’׳]?"
@@ -68,6 +69,22 @@ def parse_duration(text: str) -> int | None:
 # the number), a "+" after the number is fine, and anything after that (a note in parentheses...) is ignored.
 _CARD_WORD = r"(?:קלפים|קלף|כרטיסיות|כרטיסיה|כרטיסים|כרטיס|cards?)"
 CARD_COUNT_RE = re.compile(rf"^(?:{_CARD_WORD}\s*)?(\d[\d,]*)\+?(?![\d.])\s*(?:{_CARD_WORD})?", re.I)
+
+
+@lru_cache(maxsize=None)
+def _item_count_re(unit_words: tuple[str, ...]) -> re.Pattern:
+    word = "(?:" + "|".join(re.escape(w) for w in sorted(unit_words, key=len, reverse=True)) + ")"
+    return re.compile(rf"^(?:{word}\s*)?(\d[\d,]*)\+?(?![\d.])\s*(?:{word})?", re.I)
+
+
+def parse_item_count(text: str, unit_words: tuple[str, ...]) -> int | None:
+    """A plain count with an optional unit word on either side: '40' / '40 הטיות' / 'הטיות 40' / '40+' / 'אין' (= 0).
+    Returns None if the text doesn't start with a number."""
+    text = text.strip().rstrip(".").strip()
+    if ZERO_WORDS_RE.fullmatch(text):
+        return 0
+    match = _item_count_re(tuple(unit_words)).match(text)
+    return int(match.group(1).replace(",", "")) if match else None
 
 
 def parse_card_count(text: str) -> int | None:
