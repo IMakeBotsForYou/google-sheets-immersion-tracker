@@ -140,6 +140,25 @@ class MergeReportsTests(unittest.TestCase):
         self.assertEqual(merge_reports(self.reports, "max").total_minutes, 90)
         self.assertEqual(merge_reports(self.reports, "sum").anki_cards, 10)
 
+    def test_a_follow_up_with_only_conjugations_or_anki_never_replaces_the_full_report(self):
+        full = Report(SENT, 7, {"צפייה": 90}, None)
+        follow_up = Report(SENT, 7, {}, 30, [], 40)                  # "יום 7 / אנקי 30 / הטיות 40", sent later
+        for mode in ("last", "max"):
+            with self.subTest(mode=mode):
+                merged = merge_reports([full, follow_up], mode)
+                self.assertEqual((merged.total_minutes, merged.anki_cards, merged.conjugations), (90, 30, 40))
+        self.assertEqual(merge_reports([follow_up, full], "last").total_minutes, 90)    # in either order
+
+    def test_the_full_reports_own_values_win_over_a_follow_up(self):
+        full = Report(SENT, 7, {"צפייה": 90}, 10, [], 20)
+        follow_up = Report(SENT, 7, {}, 30, [], 40)
+        merged = merge_reports([full, follow_up], "last")
+        self.assertEqual((merged.anki_cards, merged.conjugations), (10, 20))
+
+    def test_a_day_with_only_follow_ups_is_still_a_report(self):
+        merged = merge_reports([Report(SENT, 7, {}, None, [], 40)], "last")
+        self.assertEqual((merged.total_minutes, merged.conjugations), (0, 40))
+
     def test_conjugations_follow_the_same_modes(self):
         reports = [Report(SENT, 7, {"צפייה": 30}, None, [], 20), Report(SENT, 7, {"צפייה": 90}, None, [], 40)]
         self.assertEqual(merge_reports(reports, "last").conjugations, 40)

@@ -17,7 +17,7 @@ reports (even *"שעה וחצי"* and *"1 שעה ו-20 דקות"*), and keeps a 
 - 📒 a **log tab** with the full breakdown per student and day: watching, reading, listening, reels, Anki cards
 - 🔤 an optional **conjugations tab**: one ◯ per 20 exercises, a ✖ below that
 - 📈 **two live charts**: hours of immersion and new Anki cards, one line per student
-- 🧠 it **follows your sheet**: students are listed in the order of your sheet's columns, and it never overwrites what is already in the sheet (the week-table cells, the log rows, the chart data), so your manual corrections stay
+- 🧠 it **follows your sheet**: students are listed in the order of your sheet's columns, and it never overwrites what is already in the sheet (the week-table cells, the log rows, the chart data), so your manual corrections stay (the one exception: a ✖ is filled in when a late report for that day arrives)
 
 <p align="center">
   <img src="docs/charts-preview.png" alt="Preview of the two charts" width="640"><br>
@@ -97,7 +97,7 @@ Students send a message like this. A number without a unit means minutes; missin
 | `שמיעה חצי שעה` | listening (`שמיעה פסיבית` is added to it) |
 | `רילז 10 דקות` | reels |
 | `אנקי 20 קלפים` | *optional*: new Anki cards. Logged and charted, but not part of the time |
-| `הטיות 40` | *optional*: conjugation exercises (no unit needed). Goes to its own tab, not part of the time |
+| `הטיות 40` | *optional*: conjugation exercises (no unit needed). Goes to its own tab and to the log's `הטיות` column; not part of the time, just like Anki |
 
 Understood durations: `10 דקות`, `1 שעה`, `1.5 שעות`, `1:35`, `90`, `שעה וחצי`, `רבע שעה`, `2 שעות וחצי`...
 The activity names and their aliases are configurable (see [`config.example.toml`](config.example.toml)).
@@ -106,6 +106,19 @@ Any other line in a report is ignored, but if it might have carried data (it con
 activity) you get a warning that names the student, so a typo like `קריאת 20 דקות` or a comment such as
 *"I'll add more Anki tonight"* can't silently cost anyone their circle. An absurd day number
 (`יום 29013890321890231890231`) is ignored with a warning and the day the message was sent is used instead.
+
+### Late reports
+
+A report for a day that has already been crossed out **fills that day in**: the ✖ is replaced by the circles
+the report earns. It works the same in the conjugations tab. Cells that already show circles are never replaced;
+if the chat says a *different* number of circles than the sheet shows, the run prints a warning naming the student
+and the day and leaves the cell alone (a cell where both agree is skipped silently, so re-running doesn't repeat
+the same warnings). `--overwrite` replaces everything, circles included, and `--dry-run` tells you in advance
+what would be filled in. A late report is also added to the log; the charts keep what they already hold, so the
+run tells you to use `--rebuild-charts` to include it there.
+
+A follow-up message that only contains an Anki or conjugations line (for example `יום 7` + `הטיות 40` sent later in
+the evening) adds that number to the day; it never replaces the day's full report.
 
 ### The conjugations tab
 
@@ -116,7 +129,7 @@ A report may end with a line like `הטיות 40`. It is kept apart from the imm
 | 20-39 | ◯ |
 | 40-59 | ◯◯ |
 | 60-79 | ◯◯◯ ... (one more circle for every 20, rounded down) |
-| less than 20, or no `הטיות` line, or no report | ✖ (once the day is over, exactly like the main tab) |
+| less than 20, or no `הטיות` line, or no report | ✖ (once the day is over, exactly like the main tab; a late report replaces it) |
 
 The tab (`[conjugations] worksheet`, default `הטיות`) has the same layout as the week tables and the same
 student columns. Its tables are named **`הטיות שבוע 3`**, `הטיות שבוע 4`, ... and the numbering is the same as
@@ -124,6 +137,8 @@ in the main tab, so `הטיות שבוע 3` covers the same days as `week 3`. Th
 `first_week` (3): earlier days are never written. Like everywhere else, filled cells are left alone unless you
 pass `--overwrite`. Nothing is written until at least one report in the chat contains a `הטיות` line, and a
 sheet without that tab simply skips it with a note. Switch it off with `[conjugations] enabled = false`.
+The exercise count is also stored in the log tab's `הטיות` column, between `אנקי` and the total. The total is
+the sum of the four activities only: neither Anki nor conjugations counts as immersion time.
 
 ## Quick start
 
@@ -283,7 +298,7 @@ what is new, and leaves the rest alone.
 |---|---|---|
 | Sheet, week tab | the ◯ / ✖ cells | edit the cell (it is never overwritten) |
 | Sheet, conjugations tab | the ◯ / ✖ cells for the `הטיות` line | edit the cell (it is never overwritten) |
-| Sheet, **log tab** | one row per student and day: the source of truth for the charts | edit the row (it is never overwritten) |
+| Sheet, **log tab** | one row per student and day (`תאריך, יום, תלמיד,` the activities, `אנקי, הטיות,` total): the source of truth for the charts | edit the row (it is never overwritten) |
 | Sheet, chart data tab | the numbers behind the two charts | edit or clear a cell; `--rebuild-charts` rebuilds the tab from the log |
 | `people.json` (project folder) | who is who: WhatsApp name -> sheet column | `--setup`, or edit the file |
 | `.env`, `config.toml`, `credentials/` | secrets and settings | edit the files |

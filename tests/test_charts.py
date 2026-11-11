@@ -44,7 +44,7 @@ class ColorTests(unittest.TestCase):
 
 
 def log_row(day, student, minutes, anki):
-    return [f"2026-10-{21 + day:02d}", day, student, "", "", "", "", anki, minutes]
+    return [f"2026-10-{21 + day:02d}", day, student, "", "", "", "", anki, "", minutes]    # ..., Anki, conjugations, total
 
 
 class ChartDataTests(unittest.TestCase):

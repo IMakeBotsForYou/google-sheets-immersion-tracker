@@ -66,7 +66,8 @@ class AppearanceSettings:
     green: str = "#34A853"
     red: str = "#EA4335"
     overwrite_filled_cells: bool = False    # False = cells already holding ◯ / ✖ are left alone
-    filled_cell_marks: str = "◯○⭕●⚪✖✗✘✕×❌xX"
+    filled_cell_marks: str = "◯○⭕●⚪✖✗✘✕×❌xX"      # a cell containing any of these counts as "filled in"
+    cross_marks: str = "✖✗✘✕×❌xX"                   # ...and these are the crosses among them (the rest are circles)
 
 
 @dataclass(frozen=True)

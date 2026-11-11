@@ -23,7 +23,8 @@ from .setup_wizard import read_sheet_headers, setup_people
 from .sheets.charts import print_chart_colors, write_charts
 from .sheets.client import make_sheet_opener
 from .sheets.log import build_log_rows, log_columns, print_last_day_per_student, print_log, write_log
-from .sheets.week_tables import read_conjugation_snapshot, read_snapshot, sheet_order, write_week_tables
+from .sheets.week_tables import (preview_week_tables, read_conjugation_snapshot, read_snapshot, sheet_order,
+                                 write_week_tables)
 from .textutil import normalize_name
 from .timeline import WEEKDAY_SHORT, Calendar
 from .whatsapp import parse_chat
@@ -198,8 +199,23 @@ def run(args: argparse.Namespace) -> Settings:
 
     overwrite = args.overwrite or settings.appearance.overwrite_filled_cells
     if dry_run:
+        if snapshot and snapshot.blocks:        # we have read the sheet, so we can say what would change in it
+            print()
+            tabs = [(plan, snapshot, None, "week 1")]
+            if conjugation_plan:
+                conjugation_snapshot = read_conjugation_snapshot(snapshot.spreadsheet, conjugations, settings.sheet, calendar)
+                if conjugation_snapshot:
+                    tabs.append((conjugation_plan, conjugation_snapshot, conjugations.worksheet,
+                                 f"{conjugations.words[0]} שבוע {conjugations.first_week}"))
+            for tab_plan, tab_snapshot, tab_title, example in tabs:
+                try:
+                    preview_week_tables(tab_plan, day1, overwrite, tab_snapshot, settings.sheet, settings.appearance,
+                                        calendar, tab_title=tab_title, table_example=example)
+                except TrackerError as error:
+                    print(f"WARNING: {error}")
         if not overwrite:
-            print("\n(when writing, cells that already hold ◯ / ✖ in the sheet are left untouched)")
+            print("\n(when writing: cells that already show circles are left untouched; a ✖ is replaced when the "
+                  "chat has a late report for that day)")
         if log_rows:
             print_log(log_rows, log_title, log_header)
             if settings.charts.enabled:

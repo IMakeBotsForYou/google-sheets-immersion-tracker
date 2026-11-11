@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.4.0
+
+- **Late reports fill in crossed-out days.** A ✖ is replaced by circles when the chat now has a report for that day
+  (main tab and conjugations tab). Circles already in a cell are never replaced; if the chat disagrees with them a
+  `WARNING` names the student and day and the cell is left alone (silent if both agree). `--overwrite` still
+  replaces everything, and `--dry-run` previews what would be filled in. New `appearance.cross_marks` setting.
+- **Log tab: new `הטיות` column** between `אנקי` and the total (the total never includes conjugations or Anki).
+  A log from an earlier version is upgraded in place, including one that has an empty header cell where the
+  column goes; empty `הטיות` cells of existing rows are filled from the chat, nothing else is replaced.
+- A follow-up message containing only an Anki / conjugations line no longer replaces the day's full report
+  (it used to be able to zero the day); it only supplies the missing numbers.
+- Late log rows are counted and the run suggests `--rebuild-charts`.
+- The charts moved one column to the right to stay clear of the wider log table.
+
 ## 1.3.0
 
 - **Conjugations:** a report may contain an optional `הטיות 40` line (no unit needed). It is written to its own

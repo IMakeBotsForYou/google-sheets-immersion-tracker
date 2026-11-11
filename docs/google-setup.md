@@ -51,6 +51,8 @@ The tab named by `worksheet` in `config.toml` (default `חשיפה`) holds one t
   (`charts.data_worksheet`). Both only ever *add*: a log row that exists is kept as it is (so you can correct
   it by hand), and the chart data keeps every filled cell. To refresh a chart-data cell, clear it; to rebuild
   the tab from the log, run with `--rebuild-charts`.
+- The log's columns are date, day, student, the four activities, Anki, conjugations (`הטיות`) and the total. A log
+  made by an older version is upgraded in place, and an empty header cell where `הטיות` belongs is fine.
 
 ## 5. Try it
 

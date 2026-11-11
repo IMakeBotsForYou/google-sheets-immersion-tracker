@@ -207,7 +207,8 @@ class LogIsAddOnlyTests(CliTestCase):
         self.assertEqual(self.log()[row][col], str(original + 1000))     # not reset to what the chat says
         self.assertIn("1 differ from the chat", output)
         self.assertIn(f"2026-10-27 Alice: the sheet has", output)
-        self.assertIn(f"{original + 1000} Anki cards; the chat says", output)
+        self.assertIn(f"{original + 1000} Anki cards", output)
+        self.assertIn("; the chat says", output)
         # a student's chart data is rebuilt from the corrected log
         self.run_cli(*TODAY, "--rebuild-charts")
         data = self.tab("נתוני גרפים").get_all_values()
@@ -336,6 +337,176 @@ class WarningTests(CliTestCase):
         self.assertIn("Alice: ignored a line that isn't a report line (not counted)", output)
         self.assertIn("אולי אוסיף עוד קצת אנקי בלילה", output)
         self.assertNotIn("Alice Cohen", output)
+
+
+class LateReportTests(CliTestCase):
+    """A report for a day that was already crossed out fills that day in; circles already there are never replaced."""
+    ORDER = ["Alice", "Ben", "Chloe", "Dan"]
+    LATE = ("[10/29/26, 9:00:00 PM] Chloe Mizrahi: סיכום יום 6\nצפייה 60 דקות\nקריאה 60 דקות\n"
+            "שמיעה 60 דקות\nרילז 60 דקות\nהטיות 40\n")          # Day 6 = Tue 27/10, sent two days late: 4 h, 40 exercises
+    MAIN_CHLOE_TUE = (12, 3)            # week 2 table starts at row 9; Sunday 25/10 is row 10, Tuesday row 12; Chloe is column 3
+    CONJ_CHLOE_TUE = (3, 3)
+
+    def setUp(self):
+        super().setUp()
+        self.install_sheet(self.ORDER)
+        self.late_chat = self.home / "late.txt"
+        self.late_chat.write_text((EXAMPLES / "sample_chat.txt").read_text(encoding="utf-8") + self.LATE, encoding="utf-8")
+
+    def test_a_late_report_replaces_the_cross(self):
+        self.run_cli(*TODAY)
+        main = self.tab("חשיפה")
+        self.assertEqual(main.grid[self.MAIN_CHLOE_TUE], "✖")           # Chloe sent nothing for Tuesday
+        before = dict(main.grid)
+        output, _ = self.run_cli(*TODAY, chat=self.late_chat)
+        self.assertEqual(main.grid[self.MAIN_CHLOE_TUE], "◯◯◯◯")
+        self.assertEqual({k: v for k, v in main.grid.items() if k != self.MAIN_CHLOE_TUE},
+                         {k: v for k, v in before.items() if k != self.MAIN_CHLOE_TUE})      # nothing else moved
+        self.assertIn("Filled in 1 late report(s) over a cross", output)
+        self.assertIn("Chloe 2026-10-27: ✖ -> ◯◯◯◯", output)
+
+    def test_the_late_report_is_added_to_the_log_with_a_hint_about_the_charts(self):
+        self.run_cli(*TODAY)
+        output, _ = self.run_cli(*TODAY, chat=self.late_chat)
+        rows = self.tab("יומן חשיפה").get_all_values()
+        self.assertTrue(any(r[0] == "2026-10-27" and r[2] == "Chloe" and r[-1] == "240" for r in rows))
+        self.assertIn("late reports", output)
+        self.assertIn("--rebuild-charts", output)
+
+    def test_a_late_report_also_fills_the_conjugations_tab(self):
+        tab = fake_gspread.add_week_tab(self.book, "הטיות", self.ORDER, first_week=2, weeks=2, name_template="הטיות שבוע {week}")
+        self.run_cli(*TODAY)
+        self.assertEqual(tab.grid[self.CONJ_CHLOE_TUE], "✖")
+        output, _ = self.run_cli(*TODAY, chat=self.late_chat)
+        self.assertEqual(tab.grid[self.CONJ_CHLOE_TUE], "◯◯")
+        self.assertIn("[הטיות] Filled in 1 late report(s) over a cross", output)
+
+    def test_circles_are_kept_and_a_different_chat_gives_a_warning(self):
+        self.run_cli(*TODAY)
+        main = self.tab("חשיפה")
+        main.grid[(10, 1)] = "◯"                                        # Alice on Sunday: the chat says ◯◯◯◯
+        output, _ = self.run_cli(*TODAY)
+        self.assertEqual(main.grid[(10, 1)], "◯")
+        self.assertIn("WARNING: Alice 2026-10-25: the sheet already shows ◯ but the chat says ◯◯◯◯ - left alone", output)
+
+    def test_an_unchanged_rerun_has_no_cell_warnings(self):
+        self.run_cli(*TODAY)
+        output, _ = self.run_cli(*TODAY)
+        self.assertNotIn("already shows", output)
+        self.assertNotIn("late report", output)
+
+    def test_overwrite_still_replaces_circles(self):
+        self.run_cli(*TODAY)
+        main = self.tab("חשיפה")
+        main.grid[(10, 1)] = "◯"
+        self.run_cli(*TODAY, "--overwrite")
+        self.assertEqual(main.grid[(10, 1)], "◯◯◯◯")
+
+    def test_the_dry_run_says_what_would_be_filled_in_without_writing(self):
+        self.run_cli(*TODAY)
+        batches = len(self.book.batches)
+        output, _ = self.run_cli(*TODAY, "--dry-run", chat=self.late_chat)
+        self.assertIn("Would fill in 1 late report(s) over a cross", output)
+        self.assertIn("Chloe 2026-10-27: ✖ -> ◯◯◯◯", output)
+        self.assertEqual(len(self.book.batches), batches)
+        self.assertEqual(self.tab("חשיפה").grid[self.MAIN_CHLOE_TUE], "✖")
+
+
+class LogConjugationsColumnTests(CliTestCase):
+    """The log tab gets a הטיות column before the total; an existing log is migrated, never refused or emptied."""
+    ORDER = ["Alice", "Ben", "Chloe", "Dan"]
+    TITLE = "יומן חשיפה"
+
+    def setUp(self):
+        super().setUp()
+        self.install_sheet(self.ORDER)
+
+    def log(self):
+        return self.tab(self.TITLE).get_all_values()
+
+    def drop_conjugations_column(self, placeholder=False):
+        """Turn the log tab into the layout before the column existed (or into the user's layout: an empty header cell)."""
+        tab = self.tab(self.TITLE)
+        grid = tab.get_all_values()
+        at = grid[0].index("הטיות")
+        tab.grid = {}
+        for r, row in enumerate(grid):
+            cells = list(row)
+            if placeholder:
+                cells[at] = ""                                       # the cell stays, but empty
+            else:
+                del cells[at]
+            for c, value in enumerate(cells):
+                if value != "":
+                    tab.grid[(r, c)] = value
+        return at
+
+    def test_the_header_and_rows_have_the_column_before_the_total(self):
+        self.run_cli(*TODAY)
+        header = self.log()[0]
+        self.assertEqual(header[-3:], ["אנקי", "הטיות", "סך הכל (דקות)"])
+        row = next(r for r in self.log()[1:] if r[0] == "2026-10-25" and r[2] == "Alice")
+        self.assertEqual(int(row[-1]), sum(int(x) for x in row[3:7] if x))     # the total is the four activities only
+        self.assertNotEqual(row[-2], "")
+
+    def test_an_old_log_is_migrated_and_keeps_every_value(self):
+        self.run_cli(*TODAY)
+        row_index = next(i for i, r in enumerate(self.log()) if r[0] == "2026-10-27" and r[2] == "Alice")
+        anki_col = self.log()[0].index("אנקי")
+        self.tab(self.TITLE).grid[(row_index, anki_col)] = 777            # a hand correction
+        self.drop_conjugations_column()
+        self.assertNotIn("הטיות", self.log()[0])
+        output, _ = self.run_cli(*TODAY)
+        grid = self.log()
+        self.assertEqual(grid[0][-3:], ["אנקי", "הטיות", "סך הכל (דקות)"])
+        self.assertEqual(len(grid) - 1, 25)
+        self.assertEqual(grid[row_index][anki_col], "777")                # the correction survived the migration
+        self.assertNotEqual(grid[row_index][-2], "")                      # the empty conjugations cell was filled in
+        self.assertIn("empty 'הטיות' cell(s)", output)
+        self.assertNotIn("doesn't look like this script's log", output)
+
+    def test_a_log_with_an_empty_header_cell_for_the_column_is_accepted(self):
+        """The layout from the user's sheet:  ... אנקי | (empty) | סך הכל (דקות)"""
+        self.run_cli(*TODAY)
+        self.drop_conjugations_column(placeholder=True)
+        for key in [k for k in self.tab(self.TITLE).grid if k[1] == self.log()[0].index("") and k[0] > 0]:
+            del self.tab(self.TITLE).grid[key]
+        self.assertEqual(self.log()[0][-2], "")
+        self.run_cli(*TODAY)
+        self.assertEqual(self.log()[0][-2], "הטיות")
+        self.assertTrue(all(row[-2] != "" for row in self.log()[1:] if row[0] == "2026-10-25" and row[2] == "Alice"))
+
+    def test_a_hand_entered_value_in_the_column_is_never_replaced(self):
+        self.run_cli(*TODAY)
+        row_index = next(i for i, r in enumerate(self.log()) if r[0] == "2026-10-26" and r[2] == "Ben")
+        conj_col = self.log()[0].index("הטיות")
+        self.tab(self.TITLE).grid[(row_index, conj_col)] = 99
+        output, _ = self.run_cli(*TODAY)
+        self.assertEqual(self.log()[row_index][conj_col], "99")
+        self.assertIn("99 conjugations", output)                          # reported as differing from the chat
+
+    def test_a_tab_that_is_not_a_log_is_still_left_alone(self):
+        tab = fake_gspread.FakeWorksheet(self.TITLE, rows=10, cols=4)
+        tab.grid = {(0, 0): "name", (0, 1): "score", (1, 0): "x", (1, 1): "1"}
+        self.book.sheets.append(tab)
+        output, _ = self.run_cli(*TODAY)
+        self.assertIn("doesn't look like this script's log", output)
+        self.assertEqual(tab.grid, {(0, 0): "name", (0, 1): "score", (1, 0): "x", (1, 1): "1"})
+
+
+class FollowUpMessageTests(CliTestCase):
+    """A later message with only a conjugations / Anki line adds to the day; it never wipes the day's minutes."""
+    CHAT = ("[10/25/26, 8:00:00 PM] Alice Cohen: סיכום יום 4\nצפייה 60 דקות\nקריאה 60 דקות\nשמיעה 60 דקות\n"
+            "[10/25/26, 11:00:00 PM] Alice Cohen: סיכום יום 4\nהטיות 40\n")
+
+    def test_the_day_keeps_its_minutes_and_gains_the_conjugations(self):
+        chat = self.home / "follow_up.txt"
+        chat.write_text(self.CHAT, encoding="utf-8")
+        sys.modules["gspread"] = None
+        output, _ = self.run_cli("--today", "2026-10-27 12:00", "--offline", chat=chat)
+        alice_week = next(line for line in output.splitlines() if line.startswith("Alice"))
+        self.assertIn("◯◯◯", alice_week)                                   # 180 minutes: three circles, not a cross
+        self.assertRegex(output, r"Alice\s*\|\s*60\s*\|\s*60\s*\|\s*60\s*\|\s*-\s*\|\s*-\s*\|\s*40\s*\|\s*180")
 
 
 class DryRunTests(CliTestCase):

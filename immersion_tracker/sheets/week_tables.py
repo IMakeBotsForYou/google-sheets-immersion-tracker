@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Sequence
 
@@ -166,9 +166,114 @@ def cell_update_request(sheet_id: int, row: int, col: int, cell: SheetCell, appe
     }}
 
 
-def is_filled(text: str, marks: str) -> bool:
-    """Does this cell already hold circles / a cross?"""
-    return any(char in marks for char in text)
+def _mark_sets(appearance: AppearanceSettings) -> tuple[set[str], set[str]]:
+    """(characters that count as a circle, characters that count as a cross)."""
+    crosses = set(appearance.cross_marks) | set(appearance.cross)
+    circles = (set(appearance.filled_cell_marks) | set(appearance.circle)) - crosses
+    return circles, crosses
+
+
+def cell_state(text: str, appearance: AppearanceSettings) -> str:
+    """What a cell currently holds: "circles", "cross" or "empty" (anything else is treated as empty)."""
+    circles, crosses = _mark_sets(appearance)
+    if any(char in circles for char in text):
+        return "circles"
+    if any(char in crosses for char in text):
+        return "cross"
+    return "empty"
+
+
+def circle_total(text: str, appearance: AppearanceSettings) -> int:
+    circles, _ = _mark_sets(appearance)
+    return sum(char in circles for char in text)
+
+
+@dataclass
+class CellWrites:
+    """What writing the plan into the sheet would do."""
+    requests: list[dict] = field(default_factory=list)
+    skipped: int = 0                                                    # cells left alone
+    late_fills: list[tuple[str, date, str, str]] = field(default_factory=list)   # (student, day, was, now): a ✖ replaced by circles
+    conflicts: list[tuple[str, date, str, str]] = field(default_factory=list)    # (student, day, sheet has, chat says): circles kept
+    missing_weeks: set[int] = field(default_factory=set)
+    missing_columns: set[str] = field(default_factory=set)
+
+
+def decide_cell_writes(plan: dict[tuple[str, date], SheetCell], day1: date, overwrite: bool, snapshot: SheetSnapshot,
+                       appearance: AppearanceSettings, calendar: Calendar) -> CellWrites:
+    """Compare the plan with the sheet, cell by cell:
+
+    - an empty cell is written;
+    - a cell that already shows circles is left alone (and, if the chat says a different number of circles,
+      that is reported as a conflict);
+    - a cell that shows a ✖ is replaced when the plan has circles for it - a LATE report for a day that had
+      already been crossed out - and left as it is when there is still nothing to put there;
+    - with `overwrite` every cell is written.
+    """
+    worksheet, values, blocks = snapshot.worksheet, snapshot.values, snapshot.blocks
+    writes = CellWrites()
+    week1_start = calendar.week1_first_row_date(day1)
+    for (column_name, day), cell in plan.items():
+        week_index, row_in_week = divmod((day - week1_start).days, 7)
+        block = blocks.get(week_index + 1)
+        if block is None:
+            writes.missing_weeks.add(week_index + 1)
+            continue
+        col = block.column_by_student.get(normalize_name(column_name))
+        if col is None:
+            writes.missing_columns.add(column_name)
+            continue
+        sheet_row = block.header_row + 1 + row_in_week
+        current = values[sheet_row][col] if sheet_row < len(values) and col < len(values[sheet_row]) else ""
+        if not overwrite:
+            state = cell_state(current, appearance)
+            if state == "circles":
+                writes.skipped += 1
+                if cell.green and circle_total(current, appearance) != circle_total(cell.text, appearance):
+                    writes.conflicts.append((column_name, day, current.strip(), cell.text))
+                continue
+            if state == "cross":
+                if not cell.green:              # still nothing to report: the ✖ stays
+                    writes.skipped += 1
+                    continue
+                writes.late_fills.append((column_name, day, current.strip(), cell.text))
+        writes.requests.append(cell_update_request(worksheet.id, sheet_row, col, cell, appearance))
+    return writes
+
+
+MAX_LISTED = 15
+
+
+def _print_outcome(writes: CellWrites, tag: str, would: bool) -> None:
+    print(f"{tag}{'Would update' if would else 'Updated'} {len(writes.requests)} cells.")
+    if writes.late_fills:
+        print(f"{tag}{'Would fill' if would else 'Filled'} in {len(writes.late_fills)} late report(s) over a cross:")
+        for student, day, was, now in writes.late_fills[:MAX_LISTED]:
+            print(f"{tag}  - {student} {day.isoformat()}: {was} -> {now}")
+        if len(writes.late_fills) > MAX_LISTED:
+            print(f"{tag}  ... and {len(writes.late_fills) - MAX_LISTED} more")
+    if writes.skipped:
+        print(f"{tag}Left {writes.skipped} cells alone that already had ◯ / ✖ in them (--overwrite to replace them).")
+    for student, day, shown, chat in writes.conflicts[:MAX_LISTED]:
+        print(f"{tag}WARNING: {student} {day.isoformat()}: the sheet already shows {shown} but the chat says {chat} "
+              f"- left alone (--overwrite to replace it)")
+    if len(writes.conflicts) > MAX_LISTED:
+        print(f"{tag}WARNING: ... and {len(writes.conflicts) - MAX_LISTED} more cells where the sheet differs from the chat")
+    if writes.missing_weeks:
+        print(f"{tag}WARNING: no table for week {sorted(writes.missing_weeks)} - those days were not written.")
+    if writes.missing_columns:
+        print(f"{tag}WARNING: no column header matching {sorted(writes.missing_columns)} - re-run --setup --all to fix.")
+
+
+def _check_blocks(snapshot: SheetSnapshot, sheet: SheetSettings, calendar: Calendar, tag: str,
+                  tab_title: str | None, table_example: str) -> None:
+    if not snapshot.blocks:
+        raise TrackerError(
+            f"{tag}No week tables found in '{tab_title or sheet.worksheet}' (looking for tables named like "
+            f"'{table_example}', or a '{sheet.header_marker}' header over "
+            f"{''.join(calendar.expected_weekday_labels(sheet.weekday_labels))}). "
+            f"Check the table names / weekday_labels in config.toml (and week_starts_on in [calendar]).")
+    print(f"{tag}Found {len(snapshot.blocks)} week tables (week {min(snapshot.blocks)} - week {max(snapshot.blocks)})")
 
 
 def write_week_tables(plan: dict[tuple[str, date], SheetCell], day1: date, overwrite: bool, snapshot: SheetSnapshot,
@@ -176,45 +281,19 @@ def write_week_tables(plan: dict[tuple[str, date], SheetCell], day1: date, overw
                       tab_title: str | None = None, table_example: str = "week 1"):
     """Write the plan into the week tables.  Returns the spreadsheet.
     `tab_title` is only for the extra tabs (conjugations): their messages are tagged with it."""
-    spreadsheet, worksheet, values, blocks = snapshot.spreadsheet, snapshot.worksheet, snapshot.values, snapshot.blocks
     tag = f"[{tab_title}] " if tab_title else ""
-    if not blocks:
-        raise TrackerError(
-            f"{tag}No week tables found in '{tab_title or sheet.worksheet}' (looking for tables named like "
-            f"'{table_example}', or a '{sheet.header_marker}' header over "
-            f"{''.join(calendar.expected_weekday_labels(sheet.weekday_labels))}). "
-            f"Check the table names / weekday_labels in config.toml (and week_starts_on in [calendar]).")
-    print(f"{tag}Found {len(blocks)} week tables (week {min(blocks)} - week {max(blocks)})")
+    _check_blocks(snapshot, sheet, calendar, tag, tab_title, table_example)
+    writes = decide_cell_writes(plan, day1, overwrite, snapshot, appearance, calendar)
+    if writes.requests:
+        snapshot.spreadsheet.batch_update({"requests": writes.requests})
+    _print_outcome(writes, tag, would=False)
+    return snapshot.spreadsheet
 
-    week1_start = calendar.week1_first_row_date(day1)
-    requests = []
-    skipped_filled = 0
-    missing_weeks: set[int] = set()
-    missing_columns: set[str] = set()
-    for (column_name, day), cell in plan.items():
-        week_index, row_in_week = divmod((day - week1_start).days, 7)
-        block = blocks.get(week_index + 1)
-        if block is None:
-            missing_weeks.add(week_index + 1)
-            continue
-        col = block.column_by_student.get(normalize_name(column_name))
-        if col is None:
-            missing_columns.add(column_name)
-            continue
-        sheet_row = block.header_row + 1 + row_in_week
-        current = values[sheet_row][col] if sheet_row < len(values) and col < len(values[sheet_row]) else ""
-        if not overwrite and is_filled(current, appearance.filled_cell_marks):
-            skipped_filled += 1
-            continue
-        requests.append(cell_update_request(worksheet.id, sheet_row, col, cell, appearance))
 
-    if requests:
-        spreadsheet.batch_update({"requests": requests})
-    print(f"{tag}Updated {len(requests)} cells.")
-    if skipped_filled:
-        print(f"{tag}Left {skipped_filled} cells alone that already had ◯ / ✖ in them (--overwrite to replace them).")
-    if missing_weeks:
-        print(f"{tag}WARNING: no table for week {sorted(missing_weeks)} - those days were not written.")
-    if missing_columns:
-        print(f"{tag}WARNING: no column header matching {sorted(missing_columns)} - re-run --setup --all to fix.")
-    return spreadsheet
+def preview_week_tables(plan: dict[tuple[str, date], SheetCell], day1: date, overwrite: bool, snapshot: SheetSnapshot,
+                        sheet: SheetSettings, appearance: AppearanceSettings, calendar: Calendar,
+                        tab_title: str | None = None, table_example: str = "week 1") -> None:
+    """What write_week_tables would do to the sheet as it is now - without writing anything (for --dry-run)."""
+    tag = f"[{tab_title}] " if tab_title else ""
+    _check_blocks(snapshot, sheet, calendar, tag, tab_title, table_example)
+    _print_outcome(decide_cell_writes(plan, day1, overwrite, snapshot, appearance, calendar), tag, would=True)

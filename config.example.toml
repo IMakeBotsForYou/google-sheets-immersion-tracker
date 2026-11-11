@@ -92,11 +92,13 @@ cross = "✖"
 green = "#34A853"
 red = "#EA4335"
 
-# false: a cell that already holds ◯ / ✖ (any amount) is never overwritten, only empty cells get written.
+# false: a cell that already shows circles is never overwritten, only empty cells get written - except that a ✖
+# is replaced when a (late) report for that day arrives. A warning is printed if the sheet's circles and the chat disagree.
 # true (or --overwrite): always write; this also replaces log rows and chart data with the chat's version.
 # To refresh one cell, clear it in the sheet first (the log and chart data tabs work the same way).
 overwrite_filled_cells = false
 filled_cell_marks = "◯○⭕●⚪✖✗✘✕×❌xX"      # a cell containing any of these counts as "filled in"
+cross_marks = "✖✗✘✕×❌xX"                  # ...and these are the crosses among them (the others count as circles)
 
 # ---------------------------------------------------------------------------
 [charts]

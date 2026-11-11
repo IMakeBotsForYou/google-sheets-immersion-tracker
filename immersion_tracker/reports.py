@@ -184,5 +184,14 @@ def merge_reports(reports: list[Report], mode: str = "last") -> DayTotals:
         return DayTotals(dict(minutes_by_activity), sum(card_counts) if card_counts else None,
                          sum(r.total_minutes for r in reports),
                          sum(conjugation_counts) if conjugation_counts else None)
-    chosen = max(reports, key=lambda r: r.total_minutes) if mode == "max" else reports[-1]
-    return DayTotals(dict(chosen.minutes_by_activity), chosen.anki_cards, chosen.total_minutes, chosen.conjugations)
+    # A follow-up message with only an Anki and / or conjugations line has no minutes to offer: it must not replace
+    # the day's full report (that would zero the day), it only supplies what the full report lacks.
+    full = [r for r in reports if r.minutes_by_activity]
+    pool = full or reports
+    chosen = max(pool, key=lambda r: r.total_minutes) if mode == "max" else pool[-1]
+    extras = [r for r in reversed(reports) if not r.minutes_by_activity and r is not chosen]
+    anki = chosen.anki_cards if chosen.anki_cards is not None else next(
+        (r.anki_cards for r in extras if r.anki_cards is not None), None)
+    conjugations = chosen.conjugations if chosen.conjugations is not None else next(
+        (r.conjugations for r in extras if r.conjugations is not None), None)
+    return DayTotals(dict(chosen.minutes_by_activity), anki, chosen.total_minutes, conjugations)

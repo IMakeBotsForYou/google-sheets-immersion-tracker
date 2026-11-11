@@ -19,6 +19,7 @@ from ..console import print_table
 from ..settings import ChartSettings
 from ..textutil import normalize_name
 from .colors import hex_to_rgb
+from .log import ANKI_COLUMN, TOTAL_COLUMN
 from .palette import student_colors
 
 DAY_HEADER = "יום"          # A1 of the helper tab - also how the script recognises its own tab
@@ -71,8 +72,8 @@ def build_chart_tables(log_rows: list[list], columns: Sequence[str], today_numbe
     cards: dict[str, list[float]] = {}
     for column in columns:
         cells = [by_cell.get((column, day)) for day in days]
-        minutes[column] = [_number(cell[-1]) if cell else 0 for cell in cells]
-        cards[column] = [_number(cell[-2]) if cell else 0 for cell in cells]
+        minutes[column] = [_number(cell[TOTAL_COLUMN]) if cell else 0 for cell in cells]
+        cards[column] = [_number(cell[ANKI_COLUMN]) if cell else 0 for cell in cells]
 
     def finish(series: dict[str, list[float]], cumulative: bool, scale: float) -> dict[str, list]:
         result = {}
