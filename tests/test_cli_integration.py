@@ -509,6 +509,26 @@ class FollowUpMessageTests(CliTestCase):
         self.assertRegex(output, r"Alice\s*\|\s*60\s*\|\s*60\s*\|\s*60\s*\|\s*-\s*\|\s*-\s*\|\s*40\s*\|\s*180")
 
 
+class NumberFirstReportTests(CliTestCase):
+    """Reports written with the amount first end up in the sheet like any other."""
+    CHAT = ("[10/27/26, 9:00:00 PM] Alice Cohen: סיכום יום 6:\n60 דקות קריאה \n15 דקות פודקאסט\n40 דקות צפייה\n"
+            "[10/27/26, 9:30:00 PM] Ben Levi: 30 דקות קריאה \n30 דקות פודקאסט \nאנקי 15 קלפים\n"
+            "[10/27/26, 10:00:00 PM] Chloe Mizrahi: סיכום יום 6\nקריאה 30 דקות\n60 דקות פודקאסט\n15 קלפים אנקי\n")
+
+    def test_they_reach_the_week_table_and_the_log(self):
+        chat = self.home / "number_first.txt"
+        chat.write_text(self.CHAT, encoding="utf-8")
+        sys.modules["gspread"] = None
+        output, _ = self.run_cli("--today", "2026-10-28 12:00", "--offline", chat=chat)
+        row = lambda name: next(line for line in output.splitlines() if line.startswith(name))
+        self.assertIn("◯", row("Alice").split("|")[3])          # Tue 27/10: 115 minutes -> one circle
+        self.assertRegex(output, r"Alice\s*\|\s*40\s*\|\s*60\s*\|\s*15\s*\|\s*-\s*\|\s*-\s*\|\s*-\s*\|\s*115")
+        self.assertRegex(output, r"Ben\s*\|\s*-\s*\|\s*30\s*\|\s*30\s*\|\s*-\s*\|\s*15\s*\|\s*-\s*\|\s*60")
+        self.assertRegex(output, r"Chloe\s*\|\s*-\s*\|\s*30\s*\|\s*60\s*\|\s*-\s*\|\s*15\s*\|\s*-\s*\|\s*90")
+        self.assertIn("no day number, counted as 2026-10-27", output)      # Ben's report has no day line
+        self.assertNotIn("ignored a line", output)
+
+
 class DryRunTests(CliTestCase):
     def test_offline_never_touches_google_and_uses_the_people_file_order(self):
         sys.modules["gspread"] = None                                # any "import gspread" now fails

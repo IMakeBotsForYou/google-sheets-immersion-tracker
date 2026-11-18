@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.0
+
+- **Amount-first lines**: every report line may be written the other way round, `60 דקות קריאה`, `שעה וחצי צפייה`,
+  `15 קלפים אנקי`, `40 הטיות`, and the two styles can be mixed in one report. The text before the keyword must be
+  a complete amount, so ordinary sentences are not mistaken for lines (they are warned about instead).
+- `פודקאסט` (and spelling variants) now counts as listening (`שמיעה`) by default. A `config.toml` that lists its own
+  `[reports.activities]` needs the word added to the `שמיעה` list.
+
 ## 1.4.0
 
 - **Late reports fill in crossed-out days.** A ✖ is replaced by circles when the chat now has a report for that day

@@ -25,6 +25,10 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(list(settings.reports.activities), ["צפייה", "קריאה", "שמיעה", "רילז"])
         self.assertEqual(settings.sheet.weekday_labels, ("月", "火", "水", "木", "金", "土", "日"))
 
+    def test_a_podcast_counts_as_listening_by_default(self):
+        self.assertIn("פודקאסט", Settings().reports.activities["שמיעה"])
+        self.assertIn("פודקאסט", load_settings(ROOT / "config.example.toml").reports.activities["שמיעה"])
+
     def test_partial_override_keeps_the_other_defaults(self):
         settings = settings_from_table({"charts": {"hours_cumulative": False}})
         self.assertFalse(settings.charts.hours_cumulative)

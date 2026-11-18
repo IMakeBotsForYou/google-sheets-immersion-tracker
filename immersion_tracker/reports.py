@@ -6,10 +6,13 @@ The day's time is the sum of the four activities; the Anki card count is only re
     סיכום יום 50                  (a ":" after the number is optional:  סיכום יום 50:)
     צפייה 10 דקות                 (יוטיוב counts as צפייה - it is logged under צפייה)
     קריאה 10 דקות
-    שמיעה 10 דקות                 (שמיעה פסיבית counts as שמיעה)
+    שמיעה 10 דקות                 (שמיעה פסיבית and פודקאסט count as שמיעה)
     רילז 10 דקות
     אנקי 20 קלפים                 (optional: number of Anki cards, not part of the time)
     הטיות 40                      (optional: number of conjugation exercises, no unit needed; kept in its own tab)
+
+Every line can also be written the other way round - the amount first, the keyword last - and the two forms can
+be mixed freely in one report:  "10 דקות קריאה", "שעה וחצי צפייה", "15 קלפים אנקי", "40 הטיות".
 
 Any other line is ignored - but if it looks like it might carry data (it has a number, or mentions an
 activity), a warning says so, so a typo like "קריאת 20" can't silently cost someone their circle.
@@ -69,7 +72,17 @@ class ReportParser:
         }
         self.anki_line_re = re.compile(
             rf"^\s*(?:{'|'.join(map(re.escape, anki_words))})\b\s*[:=\-–—]?\s*(.*)$", re.I | re.M)
+        # The same lines written the other way round: the amount first, the keyword last ("60 דקות קריאה").  The text
+        # before the keyword is only taken as the amount if it parses completely, so a sentence can't match by accident.
+        def trailing(alternatives: str, flags: int = 0) -> re.Pattern:
+            return re.compile(rf"^\s*(?P<value>.+?)\s+(?:של\s+)?(?P<alias>{alternatives})\s*[.!:]?\s*$", flags)
+        self.activity_trailing_res = {
+            activity: trailing("|".join(_alias_pattern(w) for w in sorted(words, key=len, reverse=True)))
+            for activity, words in activities.items()}
+        self.anki_trailing_re = trailing("|".join(map(re.escape, anki_words)), re.I)
         self.conjugation_words = tuple(conjugation_words)
+        self.conjugation_trailing_re = (trailing("|".join(_alias_pattern(w) for w in sorted(self.conjugation_words, key=len, reverse=True)))
+                                        if self.conjugation_words else None)
         self.conjugation_unit_words = self.conjugation_words + CONJUGATION_UNIT_WORDS
         self.conjugation_line_re = (re.compile(
             rf"^\s*(?:{'|'.join(_alias_pattern(w) for w in sorted(self.conjugation_words, key=len, reverse=True))})"
@@ -77,6 +90,48 @@ class ReportParser:
         self.hint_words = tuple(w.casefold() for w in (
             *(alias for aliases in activities.values() for alias in aliases), *anki_words,
             *self.conjugation_words, *HINT_WORDS))
+
+    def _activity_line(self, activity: str, line: str) -> tuple[str, str] | None:
+        """(keyword as written, amount text) if `line` is a line of this activity, in either form."""
+        match = self.activity_line_res[activity].match(line)                     # "קריאה 60 דקות"
+        if match:
+            return match.group(1), match.group(2)
+        match = self.activity_trailing_res[activity].match(line)                 # "60 דקות קריאה"
+        if match and parse_duration(match.group("value")) is not None:
+            return match.group("alias"), match.group("value")
+        return None
+
+    def _parse_conjugations(self, raw: str) -> int | None:
+        return parse_item_count(raw, self.conjugation_unit_words)
+
+    def _find_count(self, text: str, leading, trailing, parse) -> tuple[str, int | None] | None:
+        """(amount text, parsed count or None) of the Anki / conjugations line in either form, or None.
+        A keyword-first line is taken even if its amount is unreadable (so that it can be reported);
+        an amount-first line only counts if the amount parses."""
+        if leading is None:
+            return None
+        match = leading.search(text)
+        if match:
+            return match.group(1), parse(match.group(1))
+        for line in text.splitlines():
+            match = trailing.match(line)
+            if match and parse(match.group("value")) is not None:
+                return match.group("value"), parse(match.group("value"))
+        return None
+
+    def _is_report_line(self, line: str) -> bool:
+        if DAY_LINE_RE.match(line) or SUMMARY_HEADER_RE.match(line) or self.anki_line_re.search(line):
+            return True
+        if self.conjugation_line_re and self.conjugation_line_re.search(line):
+            return True
+        if any(self._activity_line(activity, line) for activity in self.activity_line_res):
+            return True
+        for trailing, parse in ((self.anki_trailing_re, parse_card_count),
+                                (self.conjugation_trailing_re, self._parse_conjugations)):
+            match = trailing.match(line) if trailing else None
+            if match and parse(match.group("value")) is not None:
+                return True
+        return False
 
     def _ignored_data_lines(self, text: str) -> list[str]:
         """Lines of a report that nothing recognised but that may carry data (a number, or an activity word):
@@ -86,9 +141,7 @@ class ReportParser:
             stripped = line.strip()
             if not stripped:
                 continue
-            if (DAY_LINE_RE.match(line) or SUMMARY_HEADER_RE.match(line) or self.anki_line_re.search(line)
-                    or (self.conjugation_line_re and self.conjugation_line_re.search(line))
-                    or any(regex.match(line) for regex in self.activity_line_res.values())):
+            if self._is_report_line(line):
                 continue
             if any(char.isdigit() for char in stripped) or any(word in stripped.casefold() for word in self.hint_words):
                 found.append(stripped)
@@ -109,18 +162,20 @@ class ReportParser:
         raw_durations: dict[str, list[str]] = {}
         seen_lines: set[tuple[str, str]] = set()
         for line in text.splitlines():
-            for activity, regex in self.activity_line_res.items():
-                match = regex.match(line)
-                if not match:
+            for activity in self.activity_line_res:
+                found = self._activity_line(activity, line)
+                if not found:
                     continue
-                key = (activity, " ".join(match.group(1).split()))
+                keyword, raw = found
+                key = (activity, " ".join(keyword.split()))
                 if key not in seen_lines:
                     seen_lines.add(key)
-                    raw_durations.setdefault(activity, []).append(match.group(2))
+                    raw_durations.setdefault(activity, []).append(raw)
                 break
-        anki_match = self.anki_line_re.search(text)
-        conjugation_match = self.conjugation_line_re.search(text) if self.conjugation_line_re else None
-        lines_found = len(raw_durations) + (1 if anki_match else 0) + (1 if conjugation_match else 0)
+        anki_line = self._find_count(text, self.anki_line_re, self.anki_trailing_re, parse_card_count)
+        conjugation_line = self._find_count(text, self.conjugation_line_re, self.conjugation_trailing_re,
+                                            self._parse_conjugations)
+        lines_found = len(raw_durations) + (1 if anki_line else 0) + (1 if conjugation_line else 0)
 
         # Enough lines to be a report and not just chatter?
         if lines_found >= 3 or (lines_found >= 1 and day_match):
@@ -132,16 +187,16 @@ class ReportParser:
                         return None, f"couldn't read the {activity} duration {raw.strip()!r}"
                 minutes_by_activity[activity] = sum(parts)
             anki_cards = None
-            if anki_match:
-                anki_cards = parse_card_count(anki_match.group(1))
+            if anki_line:
+                anki_cards = anki_line[1]
                 if anki_cards is None:      # the card count isn't part of the time, so don't throw the report away
-                    notes.append(f"couldn't read the Anki card count {anki_match.group(1).strip()!r} "
+                    notes.append(f"couldn't read the Anki card count {anki_line[0].strip()!r} "
                                  f"- report used, card count left empty")
             conjugations = None
-            if conjugation_match:
-                conjugations = parse_item_count(conjugation_match.group(1), self.conjugation_unit_words)
+            if conjugation_line:
+                conjugations = conjugation_line[1]
                 if conjugations is None:
-                    notes.append(f"couldn't read the conjugations count {conjugation_match.group(1).strip()!r} "
+                    notes.append(f"couldn't read the conjugations count {conjugation_line[0].strip()!r} "
                                  f"- report used, conjugations left empty")
             for line in self._ignored_data_lines(text):
                 notes.append(f"ignored a line that isn't a report line (not counted): {line[:80]!r}")

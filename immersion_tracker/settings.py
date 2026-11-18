@@ -23,7 +23,7 @@ except ModuleNotFoundError:             # pragma: no cover - older Pythons
 DEFAULT_ACTIVITIES: dict[str, tuple[str, ...]] = {
     "צפייה": ("צפייה", "צפיה", "יוטיוב", "יוטוב"),     # "יוטיוב" lines count as צפייה (added up if both appear)
     "קריאה": ("קריאה",),
-    "שמיעה": ("שמיעה", "שמיעה פסיבית", "הקשבה"),         # a "שמיעה פסיבית" line is added to שמיעה
+    "שמיעה": ("שמיעה", "שמיעה פסיבית", "הקשבה", "פודקאסט", "פודקסט", "פודקאסטים", "פודקסטים"),   # a podcast counts as listening
     "רילז": ("רילז", "ריילז"),
 }
 DEFAULT_ANKI_WORDS: tuple[str, ...] = ("אנקי", "anki")

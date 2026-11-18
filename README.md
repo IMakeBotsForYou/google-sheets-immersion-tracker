@@ -94,10 +94,25 @@ Students send a message like this. A number without a unit means minutes; missin
 | `סיכום יום 50` | the day number (the colon is optional) |
 | `צפייה 1 שעה ו-20 דקות` | watching (`יוטיוב` lines are added to it) |
 | `קריאה 30` | reading |
-| `שמיעה חצי שעה` | listening (`שמיעה פסיבית` is added to it) |
+| `שמיעה חצי שעה` | listening (`שמיעה פסיבית` and `פודקאסט` are added to it) |
 | `רילז 10 דקות` | reels |
 | `אנקי 20 קלפים` | *optional*: new Anki cards. Logged and charted, but not part of the time |
 | `הטיות 40` | *optional*: conjugation exercises (no unit needed). Goes to its own tab and to the log's `הטיות` column; not part of the time, just like Anki |
+
+Every line can also be written **the other way round, amount first and keyword last**, and the two styles can be
+mixed freely in one report:
+
+```text
+סיכום יום 6:
+60 דקות קריאה
+פודקאסט 15 דקות
+שעה וחצי צפייה
+15 קלפים אנקי
+```
+
+A line only counts as "amount first" if everything before the keyword is a complete amount, so a sentence such as
+*"היום עשיתי 20 דקות קריאה"* is not mistaken for a report line (it is ignored, with a warning).
+A report needs a `סיכום יום N` line or at least three recognised lines.
 
 Understood durations: `10 דקות`, `1 שעה`, `1.5 שעות`, `1:35`, `90`, `שעה וחצי`, `רבע שעה`, `2 שעות וחצי`...
 The activity names and their aliases are configurable (see [`config.example.toml`](config.example.toml)).

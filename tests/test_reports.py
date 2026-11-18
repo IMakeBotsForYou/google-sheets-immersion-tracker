@@ -51,6 +51,81 @@ class ExtractReportTests(unittest.TestCase):
         self.assertIn("סיכום יום", problem)
 
 
+class NumberFirstLineTests(unittest.TestCase):
+    """The amount may come first and the keyword last ("60 דקות קריאה"); both forms can be mixed in one report."""
+
+    def parts(self, text):
+        report, problem = extract(text)
+        self.assertIsNone(problem, text)
+        return report
+
+    def test_the_first_example(self):
+        report = self.parse_example("סיכום יום 6:\n60 דקות קריאה \n15 דקות פודקאסט\n40 דקות צפייה")
+        self.assertEqual(report.day_number, 6)
+        self.assertEqual(report.minutes_by_activity, {"קריאה": 60, "שמיעה": 15, "צפייה": 40})   # a podcast is listening
+        self.assertEqual((report.total_minutes, report.notes), (115, []))
+
+    def test_the_second_example_needs_no_day_line(self):
+        report = self.parse_example("30 דקות קריאה \n30 דקות פודקאסט \nאנקי 15 קלפים")
+        self.assertIsNone(report.day_number)
+        self.assertEqual(report.minutes_by_activity, {"קריאה": 30, "שמיעה": 30})
+        self.assertEqual((report.anki_cards, report.notes), (15, []))
+
+    def test_mixed_forms_in_one_report(self):
+        report = self.parse_example("סיכום יום 7\nקריאה 20 דקות\n30 דקות פודקאסט\nצפייה שעה וחצי\n15 קלפים אנקי\n40 הטיות")
+        self.assertEqual(report.minutes_by_activity, {"קריאה": 20, "שמיעה": 30, "צפייה": 90})
+        self.assertEqual((report.anki_cards, report.conjugations, report.notes), (15, 40, []))
+
+    def parse_example(self, text):
+        report, problem = extract(text)
+        self.assertIsNone(problem, text)
+        self.assertIsNotNone(report, text)
+        return report
+
+    def test_amount_styles_in_front_of_the_keyword(self):
+        cases = {"60 דקות קריאה": 60, "60 קריאה": 60, "שעה וחצי קריאה": 90, "1 שעה ו-20 דקות קריאה": 80,
+                 "1:30 קריאה": 90, "רבע שעה קריאה": 15, "20 דקות של קריאה": 20, "45 דקות קריאה.": 45, "0 קריאה": 0}
+        for line, minutes in cases.items():
+            with self.subTest(line=line):
+                report = self.parse_example(f"סיכום יום 6\n{line}")
+                self.assertEqual(report.minutes_by_activity, {"קריאה": minutes})
+
+    def test_every_listening_word_in_either_order(self):
+        for word in ("שמיעה", "שמיעה פסיבית", "הקשבה", "פודקאסט", "פודקסט", "פודקאסטים"):
+            for line in (f"{word} 25 דקות", f"25 דקות {word}"):
+                with self.subTest(line=line):
+                    self.assertEqual(self.parse_example(f"סיכום יום 6\n{line}").minutes_by_activity, {"שמיעה": 25})
+
+    def test_different_names_of_one_activity_are_added_up_whatever_the_form(self):
+        report = self.parse_example("סיכום יום 6\nשמיעה 10 דקות\n20 דקות פודקאסט\n30 דקות שמיעה פסיבית")
+        self.assertEqual(report.minutes_by_activity, {"שמיעה": 60})
+
+    def test_anki_and_conjugations_amount_first(self):
+        base = "סיכום יום 6\nקריאה 10\n"
+        for line, cards in {"15 קלפים אנקי": 15, "15 אנקי": 15, "400+ קלפים אנקי": 400, "0 אנקי": 0}.items():
+            with self.subTest(line=line):
+                self.assertEqual(self.parse_example(base + line).anki_cards, cards)
+        for line, count in {"40 הטיות": 40, "40 תרגילים הטיות": 40, "20 הטיה": 20}.items():
+            with self.subTest(line=line):
+                self.assertEqual(self.parse_example(base + line).conjugations, count)
+
+    def test_a_sentence_is_not_mistaken_for_a_line(self):
+        """The text before the keyword must be an amount and nothing else."""
+        base = "סיכום יום 6\nצפייה 10\nשמיעה 10\nרילז 10\n"
+        for sentence in ("היום עשיתי 20 דקות קריאה", "אולי 20 דקות קריאה", "ביום 6 קריאה", "הרבה קריאה"):
+            with self.subTest(sentence=sentence):
+                report = self.parse_example(base + sentence)
+                self.assertNotIn("קריאה", report.minutes_by_activity)      # not counted ...
+                self.assertTrue(any(sentence in note for note in report.notes))    # ... but warned about
+
+    def test_a_number_first_line_is_not_an_ignored_line(self):
+        self.assertEqual(self.parse_example("סיכום יום 6\n60 דקות קריאה\n15 דקות פודקאסט").notes, [])
+
+    def test_ordinary_chat_with_an_activity_word_is_still_chat(self):
+        self.assertEqual(extract("מישהו מכיר ערוץ יוטיוב טוב?"), (None, None))
+        self.assertEqual(extract("אני סיימתי 20 דקות קריאה"), (None, None))
+
+
 class ConjugationLineTests(unittest.TestCase):
     BASE = "יום 9\nצפייה 100 דקות\nשמיעה 100 דקות\nאנקי 100 קלפים\n"
 
